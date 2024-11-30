@@ -67,6 +67,17 @@ pip install -e .
 
 This will install the thesis package and all the necessary dependencies it has.
 
+## External Dependencies
+
+### Grakel
+Just install some python stuff from the Windows Virtual Studio SDK:
+https://learn.microsoft.com/en-us/visualstudio/python/working-with-c-cpp-python-in-visual-studio?view=vs-2019#prerequisites
+
+### Music21 & Musescore
+TODO: Al can put the installation things that need to be done to get musescore / music21
+running properly
+
+
 # Importing the Library
 
 Make sure that wherever you're coding it's on the same level as the 
