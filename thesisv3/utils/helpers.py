@@ -1,6 +1,9 @@
+import pickle
+import os
 import networkx as nx
 from grakel import Graph
 from grakel.kernels import LovaszTheta
+
 
 def save_to_pickle(data, filename):
     """

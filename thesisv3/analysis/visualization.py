@@ -1,17 +1,11 @@
-import os
-import re
-import time
 import copy
+import os
 import tempfile
-import pandas as pd
-import numpy as np
-from collections import Counter
 
 import ipywidgets as widgets
-from IPython.display import display, clear_output, Audio
-
+import pandas as pd
+from IPython.display import display, clear_output
 from music21 import (
-    converter,
     stream,
     note,
     chord,
@@ -19,8 +13,8 @@ from music21 import (
     layout,
     environment
 )
-
 from pygame import mixer
+
 
 def visualize_segment(segments, segment_index, original_score, show_score=True):
     """
@@ -590,6 +584,8 @@ def create_segment_info_string(segment_analysis):
         info.append(f"  {pattern}: {count}")
 
     return "\n".join(info)
+
+
 def visualize_score_with_colored_segments(original_score, segments):
     """
     Creates a visualization of the full score with color-coded segments and labels.

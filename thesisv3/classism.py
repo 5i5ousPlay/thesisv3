@@ -1,19 +1,22 @@
-# music_analysis.py
-
-# Import all required dependencies at the top
-from pathlib import Path
-import ipywidgets as widgets
-from IPython.display import display
-from music21 import converter
 import pickle
-import numpy as np
-from graph_building_claude import *
-from analysis.visualization import *
+
+import music21
+from music21 import converter, environment
+
+from thesisv3.analysis.visualization import *
+from thesisv3.preprocessing.preprocessing import *
+from thesisv3.building.building import distance_matrix_to_knn_graph_scaled
+from thesisv3.utils.file_manager import MusicFileManager
+
+# Configure MuseScore paths
+env = environment.Environment()
+env['musicxmlPath'] = 'C:\\Program Files\\MuseScore 4\\bin\\MuseScore4.exe'
+env['musescoreDirectPNGPath'] = 'C:\\Program Files\\MuseScore 4\\bin\\MuseScore4.exe'
+
+us = music21.environment.UserSettings()
+us['musescoreDirectPNGPath'] = 'C:/Program Files/MuseScore 4/bin/MuseScore4.exe'
 
 __all__ = ['MusicFileManager', 'MusicSegmentAnalyzer', 'MusicVisualizer']
-
-
-
 
 
 class MusicSegmentAnalyzer:

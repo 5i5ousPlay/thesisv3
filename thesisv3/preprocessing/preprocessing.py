@@ -1,15 +1,15 @@
+import re
 from multiprocessing import cpu_count, Manager, Pool
-from sklearn.neighbors import kneighbors_graph
-import worker
+
+import matplotlib.pyplot as plt
 import networkx as nx
 import numpy as np
 import pandas as pd
+
+from thesisv3.utils import worker
 from music21 import chord, note, stream, meter
-import matplotlib.pyplot as plt
-from networkx.algorithms.cuts import conductance
-from IPython.display import display, HTML
-from pyvis.network import Network
-import re
+from sklearn.neighbors import kneighbors_graph
+
 
 # # Usage
 # Current flow: \
@@ -62,8 +62,8 @@ def recreate_score(elements_df):
     """
     Recreates a music21 score object from a DataFrame of score elements.
 
-    Parameters:
-    elements_df (pd.DataFrame): A DataFrame containing part index, offset, duration, type, and pitch information for each element.
+    Parameters: elements_df (pd.DataFrame): A DataFrame containing part index, offset, duration, type, and pitch
+    information for each element.
 
     Returns:
     music21.stream.Score: The recreated music21 score object.
@@ -197,9 +197,6 @@ def parse_score_elements(score: stream.Score, all_parts: bool = False) -> tuple[
     return nmat, narr, sarr
 
 
-
-
-
 def calculate_ir_symbol(interval1, interval2, threshold=5):
     """
     Calculates the Implication-Realization symbol based on the intervals between notes.
@@ -321,7 +318,6 @@ def assign_ir_symbols(note_array):
                     beam_status in ['continue', 'stop', 'partial']):
                 if beam_status == 'stop':
 
-
                     # TODO: REVISIT IF IT IS WEIRD
                     if len(current_group) == 2:
                         i += 1
@@ -408,7 +404,6 @@ def visualize_notes_with_symbols(notes_with_symbols, original_score):
     new_score.show()
 
 
-
 def ir_symbols_to_matrix(note_array, note_matrix):
     """
     Assigns IR symbols to the note matrix based on the note array.
@@ -469,6 +464,7 @@ def get_onset(notematrix: pd.DataFrame, timetype='beat'):
         return notematrix['onset_beats']
     else:
         raise ValueError(f"Invalid timetype: {timetype}")
+
 
 def get_pitch(notematrix: pd.DataFrame, timetype='beat'):
     if timetype == 'beat':
@@ -662,8 +658,8 @@ def boundary(nmat, fig=False):
     off = on + dur
 
     # Profiles
-    pp = np.abs(np.diff(pitch))            # pitch profile
-    po = np.diff(on)                       # IOI profile
+    pp = np.abs(np.diff(pitch))  # pitch profile
+    po = np.diff(on)  # IOI profile
     pr = np.maximum(0, on[1:] - off[:-1])  # rest profile
 
     # Degrees of change
@@ -718,7 +714,7 @@ def boundary(nmat, fig=False):
         # Piano roll plot
         plt.subplot(2, 1, 1)
         for i in range(len(on)):
-            plt.plot([on[i], on[i]+dur[i]], [pitch[i], pitch[i]], color='black')
+            plt.plot([on[i], on[i] + dur[i]], [pitch[i], pitch[i]], color='black')
         plt.title('Piano Roll')
         plt.ylabel('Pitch')
         xl = [np.min(on), np.max(on)]
@@ -736,7 +732,6 @@ def boundary(nmat, fig=False):
         plt.show()
 
     return b
-
 
 
 def segment_lbdm(nmat):
@@ -833,7 +828,8 @@ def preprocess_segments(segments: list[pd.DataFrame]) -> list[pd.DataFrame]:
         # 'pitch_class',
         # 'octave',
         # 'beat_strength'
-        segment = segment[['onset_beats_in_measure', 'duration_beats', 'pitch_class', 'octave', 'beat_strength'] + state_columns]
+        segment = segment[
+            ['onset_beats_in_measure', 'duration_beats', 'pitch_class', 'octave', 'beat_strength'] + state_columns]
 
         preprocessed_segments.append(segment)
 
