@@ -1017,3 +1017,28 @@ def mobility(nmat: pd.DataFrame):
     y[-1] = 0
 
     return np.abs(y)
+
+
+def tessitura(nmat:pd.DataFrame):
+    """
+    Melodic tessitura based on deviation from median pitch height (Hippel, 2000)
+    Based on tessitura function from MidiToolKit (Toiviainen. 2016)
+    """
+    if len(nmat) == 0:
+        return np.array([])
+
+    n = len(nmat.index)
+    if n < 2:
+        return np.zeros(n)
+    pitches = nmat['midi_pitch'].to_numpy()
+
+    deviation = np.zeros(n)
+    y = np.zeros(n)
+
+    for i in range(1, n):
+        median_pitch = np.median(pitches[:i])
+        deviation[i-1] = np.std(pitches[:i])
+        y[i-1] = (pitches[i] - median_pitch) / deviation[i-1]
+        y[0] = 0
+
+    return np.abs(y)
