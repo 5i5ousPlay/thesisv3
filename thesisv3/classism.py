@@ -47,6 +47,7 @@ class MusicSegmentAnalyzer:
 
         nmat, narr, sarr = parse_score_elements(self.parsed_score)
         nmat['mobility'] = mobility(nmat) # calculate mobility and add column to raw nmat
+        nmat['tessitura'] = tessitura(nmat) # calculate tessitura and add column to raw nmat
         self.nmat = nmat # save raw nmat
         ir_symbols = assign_ir_symbols(narr)
         ir_nmat = ir_symbols_to_matrix(ir_symbols, nmat)
