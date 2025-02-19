@@ -45,6 +45,7 @@ class MusicSegmentAnalyzer:
             raise ValueError("No score loaded. Call load_score first.")
 
         nmat, narr, sarr = parse_score_elements(self.parsed_score)
+
         ir_symbols = assign_ir_symbols(narr)
         ir_nmat = ir_symbols_to_matrix(ir_symbols, nmat)
         ir_nmat = assign_ir_pattern_indices(ir_nmat)

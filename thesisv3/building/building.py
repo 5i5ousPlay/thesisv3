@@ -214,6 +214,7 @@ def mass_produce_segments(filepath, pickle_dir=None, pickle_file=None):
             parsed_score = converter.parse(piece_path)
             nmat, narr, sarr = parse_score_elements(parsed_score)
             ir_symbols = assign_ir_symbols(narr)
+            #TODO: Expectancy score here
             ir_nmat = ir_symbols_to_matrix(ir_symbols, nmat)
             ir_nmat = assign_ir_pattern_indices(ir_nmat)
 
