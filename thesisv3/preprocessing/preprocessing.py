@@ -983,3 +983,37 @@ def parse_segments(file_path):
     array = np.array(data)
 
     return array
+
+
+def mobility(nmat: pd.DataFrame):
+    """
+    Melodic motion as a mobility (Hippel, 2000).
+    Based on mobility function from MidiToolKit (Toiviainen. 2016)
+    """
+    if len(nmat) == 0:
+        return np.array([])
+
+    pitches = nmat['midi_pitch'].to_numpy()
+    n = len(nmat.index)
+
+    if n < 2:
+        return np.zeros(n)
+
+    mob = np.zeros(n)
+    y = np.zeros(n)
+
+    for i in range(1, n):
+        mean_pitch = np.mean(pitches[:i])
+
+        p = pitches[:i] - mean_pitch
+        p2 = pitches[1:i + 1] - mean_pitch
+
+        if len(p) > 1:
+            correlation_matrix = np.corrcoef(p, p2)
+            mob[i] = correlation_matrix[0, 1] if not np.isnan(correlation_matrix[0, 1]) else 0
+
+        y[i - 1] = mob[i - 1] * (pitches[i] - mean_pitch)
+
+    y[-1] = 0
+
+    return np.abs(y)
