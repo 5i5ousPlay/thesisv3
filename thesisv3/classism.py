@@ -48,6 +48,7 @@ class MusicSegmentAnalyzer:
         nmat, narr, sarr = parse_score_elements(self.parsed_score)
         nmat['mobility'] = mobility(nmat) # calculate mobility and add column to raw nmat
         nmat['tessitura'] = tessitura(nmat) # calculate tessitura and add column to raw nmat
+        nmat['expectancy'] = calculate_note_expectancy_scores(nmat)
         self.nmat = nmat # save raw nmat
         ir_symbols = assign_ir_symbols(narr)
         ir_nmat = ir_symbols_to_matrix(ir_symbols, nmat)
@@ -81,6 +82,12 @@ class MusicSegmentAnalyzer:
         with open(filepath, 'rb') as f:
             self.segments = pickle.load(f)
         return self
+
+    def run(self, filepath):
+        self.load_score(filepath)
+        self.analyze_segments()
+        self.preprocess_segments()
+        self.calculate_distance_matrix()
 
 
 class MusicVisualizer:
