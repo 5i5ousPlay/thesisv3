@@ -8,6 +8,7 @@ from scipy.stats import ttest_ind, mannwhitneyu
 from statistics import mean
 from networkx.algorithms.community import kernighan_lin_bisection
 from thesisv3.utils.helpers import compare_graphs_kernel
+from thesisv3.classism import GraphBuilder, MusicSegmentAnalyzer, MusicFileManager
 import matplotlib.pyplot as plt
 
 
@@ -23,8 +24,12 @@ class KNNGraphTuner:
     max_k = None
     k_step = None
 
-    def __init__(self, distance_matrices: list[np.ndarray], graph_kernel: grakel.kernels.Kernel, seed=42,
-                 min_k=1, max_k=10, k_step=1):
+    def __init__(self,
+                 graph_kernel: grakel.kernels.Kernel,
+                 seed=42,
+                 min_k=1,
+                 max_k=10,
+                 k_step=1):
         """
         Initializes a Tuner instance.
         Args:
@@ -35,39 +40,30 @@ class KNNGraphTuner:
             max_k (int): maximum k value to test
             k_step (int): interval step for k value testing
         """
-        self.distance_matrices = distance_matrices
+        self.distance_matrices = []
+        self.segments = []
         self.graph_kernel = graph_kernel
         self.seed = seed
         self.min_k = min_k
         self.max_k = max_k
         self.k_step = k_step
+        self.file_manager = MusicFileManager()
+        self.analyzer = MusicSegmentAnalyzer()
 
-    def _construct_graph(self, k: int, distance_matrix: np.ndarray):
-        knn_graph = kneighbors_graph(distance_matrix, n_neighbors=k, mode='connectivity')
-        G = nx.from_scipy_sparse_array(knn_graph)
-
-        G = self._ensure_connectivity(G, distance_matrix)
-
-        return G
-
-    def _ensure_connectivity(self, G: nx.Graph, distance_matrix: np.ndarray):
-        if not nx.is_connected(G):
-
-            components = list(nx.connected_components(G))
-
-            for i in range(len(components) - 1):
-                min_dist = np.inf
-                closest_pair = None
-                for node1 in components[i]:
-                    for node2 in components[i + 1]:
-                        dist = distance_matrix[node1, node2]
-                        if dist < min_dist:
-                            min_dist = dist
-                            closest_pair = (node1, node2)
-
-                G.add_edge(closest_pair[0], closest_pair[1])
-
-        return G
+    def _calculate_segments_and_distance_matrix(self) -> None:
+        for file in self.file_manager.files:
+            print(f"Analyzing {file}")
+            try:
+                self.analyzer.run(self.file_manager.files[file])
+                if not np.isnan(self.analyzer.distance_matrix).any():
+                    self.segments.append(self.analyzer.prepped_segments)
+                    self.distance_matrices.append(self.analyzer.distance_matrix)
+                else:
+                    print(f"Distance Matrix of {file} has null values and cannot be converted into a graph. Skipping")
+            except Exception as e:
+                print(f"Error parsing: {file} at {self.file_manager.files[file]}. Skipping file")
+                print(e)
+                continue
 
     def _partition(self, graph: nx.Graph, distance_matrix: np.ndarray):
         rng = np.random.default_rng(self.seed)
@@ -103,26 +99,28 @@ class KNNGraphTuner:
         within_graph_scores = []
         between_graph_scores = []
 
-        graphs = []
-        for distance_matrix in self.distance_matrices:
-            graph = self._construct_graph(distance_matrix=distance_matrix, k=k)
+        whole_graphs = []
+        for distance_matrix, segments in zip(self.distance_matrices, self.segments):
+            builder = GraphBuilder(k=k, distance_matrix=distance_matrix, segments=segments)
+            graph = builder.construct_graph()
+            whole_graphs.append(graph)
+
+        distance_matrices = self.distance_matrices
+
+        for graph, distance_matrix in zip(whole_graphs, distance_matrices):
             partition1, partition2 = self._partition(graph=graph, distance_matrix=distance_matrix)
-            graphs.append(
-                {
-                    "split_graphs": (partition1, partition2),
-                    "whole_graph": graph
-                    }
-                )
             similarity_within = compare_graphs_kernel([partition1, partition2], self.graph_kernel)[0, 1]
             within_graph_scores.append(similarity_within)
 
-        for i in range(len(graphs)):
-            for j in range(i+1, len(graphs)):
-                whole_graph_1 = graphs[i]['whole_graph']
-                whole_graph_2 = graphs[j]['whole_graph']
+        for i in range(len(whole_graphs)):
+            for j in range(i+1, len(whole_graphs)):
+                whole_graph_1 = whole_graphs[i]
+                whole_graph_2 = whole_graphs[j]
 
                 similarity_between = compare_graphs_kernel([whole_graph_1, whole_graph_2], self.graph_kernel)[0, 1]
                 between_graph_scores.append(similarity_between)
+
+        # print(within_graph_scores, between_graph_scores)
 
         return within_graph_scores, between_graph_scores
 
@@ -135,6 +133,8 @@ class KNNGraphTuner:
             graph_statistics (pd.DataFrame): Dataframe containing the parametric and non-parametric
             p-values for each k-value within the specified range.
         """
+        if not self.distance_matrices or not self.segments:
+            self._calculate_segments_and_distance_matrix()
         graph_statistics = pd.DataFrame(columns=['k', 'normality_wtihin', 'normality_between', 'average_within',
                                                  'average_between', 'parametric_p_value', 'non_parametric_p_value'])
         for k in range(self.min_k, self.max_k, self.k_step):
