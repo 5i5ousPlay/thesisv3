@@ -31,7 +31,7 @@ setup(
         'python-dateutil==2.9.0.post0',
         'pytz==2024.2',
         'scikit-learn==1.5.2',
-        'scipy==1.14.1',
+        'scipy==1.13.0',
         'six==1.16.0',
         'threadpoolctl==3.5.0',
         'tzdata==2024.2'
