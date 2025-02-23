@@ -130,3 +130,65 @@ class MusicVisualizer:
             f"{title}\n",
             seed
         )
+
+
+class GraphBuilder:
+    def __init__(self, k: int, distance_matrix: np.ndarray, segments: list[pd.DataFrame]):
+        self.k = k
+        self.graph = None
+        self.graphs = None
+        self.distance_matrix = distance_matrix
+        self.segments = segments
+
+    def construct_graph(self):
+        knn_graph = kneighbors_graph(self.distance_matrix, n_neighbors=self.k, mode='connectivity')
+        G = nx.from_scipy_sparse_array(knn_graph)
+
+        for i in range(len(self.segments)):
+            G.nodes[i]['label'] = np.round(self.segments[i]['expectancy'].mean(), decimals=2)
+
+        if not nx.is_connected(G):
+            print("The KNN graph is disjoint. Ensuring connectivity...")
+
+            components = list(nx.connected_components(G))
+
+            for i in range(len(components) - 1):
+                min_dist = np.inf
+                closest_pair = None
+                for node1 in components[i]:
+                    for node2 in components[i + 1]:
+                        dist = self.distance_matrix[node1, node2]
+                        if dist < min_dist:
+                            min_dist = dist
+                            closest_pair = (node1, node2)
+                G.add_edge(closest_pair[0], closest_pair[1])
+        self.graph = G
+        return G
+
+
+class GraphBatcher:
+    def __init__(self, k=5):
+        self.k = k
+        self.graphs = []
+        self.segments = []
+        self.distance_matrices = []
+        self.file_manager = MusicFileManager()
+        self.analyzer = MusicSegmentAnalyzer()
+
+    def batch(self):
+        for file in self.file_manager.files:
+            print(f"Analyzing {file}")
+            try:
+                self.analyzer.run(self.file_manager.files[file])
+                builder = GraphBuilder(self.k,
+                                       self.analyzer.distance_matrix,
+                                       self.analyzer.prepped_segments)
+                self.graphs.append(builder.construct_graph())
+                self.segments.append(self.analyzer.prepped_segments)
+                self.distance_matrices.append(self.analyzer.distance_matrix)
+
+            except Exception as e:
+                print(f"Error parsing: {file} at {self.file_manager.files[file]}. Skipping file")
+                print(e)
+                continue
+
