@@ -34,6 +34,10 @@ setup(
         'scipy==1.13.0',
         'six==1.16.0',
         'threadpoolctl==3.5.0',
-        'tzdata==2024.2'
+        'tzdata==2024.2',
+        'tslearn~=0.6.3',
+        'ipywidgets~=8.1.5',
+        'ipython~=8.32.0',
+        'music21~=9.3.0',
         ]
     )
