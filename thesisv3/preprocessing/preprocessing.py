@@ -9,6 +9,7 @@ import pandas as pd
 from thesisv3.utils import worker
 from music21 import chord, note, stream, meter
 from sklearn.neighbors import kneighbors_graph
+from sklearn.preprocessing import MinMaxScaler
 
 
 # # Usage
@@ -829,7 +830,7 @@ def preprocess_segments(segments: list[pd.DataFrame]) -> list[pd.DataFrame]:
         # 'octave',
         # 'beat_strength'
         segment = segment[
-            ['onset_beats_in_measure', 'duration_beats', 'pitch_class', 'octave', 'beat_strength'] + state_columns]
+            ['onset_beats_in_measure', 'duration_beats', 'pitch_class', 'octave', 'beat_strength', 'expectancy'] + state_columns]
 
         preprocessed_segments.append(segment)
 
@@ -983,3 +984,86 @@ def parse_segments(file_path):
     array = np.array(data)
 
     return array
+
+
+def mobility(nmat: pd.DataFrame):
+    """
+    Melodic motion as a mobility (Hippel, 2000).
+    Based on mobility function from MidiToolKit (Toiviainen. 2016)
+    """
+    if len(nmat) == 0:
+        return np.array([])
+
+    pitches = nmat['midi_pitch'].to_numpy()
+    n = len(nmat.index)
+
+    if n < 2:
+        return np.zeros(n)
+
+    mob = np.zeros(n)
+    y = np.zeros(n)
+
+    for i in range(1, n):
+        mean_pitch = np.mean(pitches[:i])
+
+        p = pitches[:i] - mean_pitch
+        p2 = pitches[1:i + 1] - mean_pitch
+
+        if len(p) > 1:
+            correlation_matrix = np.corrcoef(p, p2)
+            mob[i] = correlation_matrix[0, 1] if not np.isnan(correlation_matrix[0, 1]) else 0
+
+        y[i - 1] = mob[i - 1] * (pitches[i] - mean_pitch)
+
+    y[-1] = 0
+
+    return np.abs(y)
+
+
+def tessitura(nmat:pd.DataFrame):
+    """
+    Melodic tessitura based on deviation from median pitch height (Hippel, 2000)
+    Based on tessitura function from MidiToolKit (Toiviainen. 2016)
+    """
+    if len(nmat) == 0:
+        return np.array([])
+
+    n = len(nmat.index)
+    if n < 2:
+        return np.zeros(n)
+    pitches = nmat['midi_pitch'].to_numpy()
+
+    deviation = np.zeros(n)
+    y = np.zeros(n)
+
+    for i in range(1, n):
+        median_pitch = np.median(pitches[:i])
+        deviation[i-1] = np.std(pitches[:i])
+        if deviation[i - 1] == 0:
+            y[i - 1] = 0  # If no variation, set tessitura to 0
+        else:
+            y[i - 1] = (pitches[i] - median_pitch) / deviation[i - 1]
+        # y[i-1] = (pitches[i] - median_pitch) / deviation[i-1]
+        y[0] = 0
+
+    return np.abs(y)
+
+
+def calculate_note_expectancy_scores(nmat: pd.DataFrame) -> np.ndarray:
+    w1 = 0.7
+    w2 = 0.3
+
+    # nmat['tessitura'].replace([np.inf, -np.inf], np.nan, inplace=True)
+    # nmat['mobility'].replace([np.inf, -np.inf], np.nan, inplace=True)
+    # nmat.fillna(nmat.mean(), inplace=True)
+
+    scaler = MinMaxScaler()
+    normalized_tessitura = scaler.fit_transform(nmat[['tessitura']])
+    normalized_mobility = scaler.fit_transform(nmat[['mobility']])
+    raw_expectancy = w1 * (1 - normalized_tessitura) + w2 * normalized_mobility
+    expectancy_scores = 0.5 + 0.5 * (raw_expectancy - 0.5)
+
+    # Adjust first two notes
+    expectancy_scores[0] = 0.5
+
+    return expectancy_scores
