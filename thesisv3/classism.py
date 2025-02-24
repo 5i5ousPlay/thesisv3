@@ -28,7 +28,10 @@ class MusicSegmentAnalyzer:
         self.segments = None
         self.prepped_segments = None
         self.distance_matrix = None
-        self.nmat = None # create field for raw nmat
+        self.nmat = None  # create field for raw nmat
+        self.narr = None
+        self.sarr = None
+        self.ir_symbols = None
 
     def load_score(self, score_path=None):
         """Load and parse a music score"""
@@ -46,11 +49,14 @@ class MusicSegmentAnalyzer:
             raise ValueError("No score loaded. Call load_score first.")
 
         nmat, narr, sarr = parse_score_elements(self.parsed_score)
-        nmat['mobility'] = mobility(nmat) # calculate mobility and add column to raw nmat
-        nmat['tessitura'] = tessitura(nmat) # calculate tessitura and add column to raw nmat
+        nmat['mobility'] = mobility(nmat)  # calculate mobility and add column to raw nmat
+        nmat['tessitura'] = tessitura(nmat)  # calculate tessitura and add column to raw nmat
         nmat['expectancy'] = calculate_note_expectancy_scores(nmat)
-        self.nmat = nmat # save raw nmat
+        self.nmat = nmat  # save raw nmat
+        self.narr = narr
+        self.sarr = sarr
         ir_symbols = assign_ir_symbols(narr)
+        self.ir_symbols = ir_symbols
         ir_nmat = ir_symbols_to_matrix(ir_symbols, nmat)
         ir_nmat = assign_ir_pattern_indices(ir_nmat)
         self.segments = segmentgestalt(ir_nmat)
@@ -117,6 +123,14 @@ class MusicVisualizer:
             self.analyzer.parsed_score,
             num_segments
         )
+
+    def visualize_ir(self):
+        """Visualize the IR patterns in the piece"""
+        if not self.analyzer or not self.analyzer.ir_symbols:
+            raise ValueError("No IR symbols available")
+
+        ir_score = visualize_notes_with_symbols(self.analyzer.ir_symbols, self.analyzer.parsed_score)
+        ir_score.show()
 
     def visualize_knn_graph(self, k=3, seed=69, title=None):
         """Create and display a KNN graph of the segments"""
@@ -191,4 +205,3 @@ class GraphBatcher:
                 print(f"Error parsing: {file} at {self.file_manager.files[file]}. Skipping file")
                 print(e)
                 continue
-

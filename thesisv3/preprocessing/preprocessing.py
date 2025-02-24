@@ -234,7 +234,7 @@ def calculate_ir_symbol(interval1, interval2, threshold=5):
         return 'M'  # Default to Monad if none of the above
 
 
-def assign_ir_symbols(note_array):
+def assign_ir_symbols_old(note_array):
     """
     Assigns IR symbols and colors to each element in the score array.
 
@@ -302,7 +302,7 @@ def assign_ir_symbols(note_array):
 
 
 # TODO: ir symbol assignment accounting slurred notes. Using this would require updating ir index assignment as well
-def assign_ir_symbols_wonky(note_array):
+def assign_ir_symbols(note_array):
     """
     Assigns IR symbols and colors to each element in the score array.
 
@@ -375,10 +375,12 @@ def assign_ir_symbols_wonky(note_array):
                 group_pitches.append(element.root().ps)
 
             # BEAM
-            if (last_beam_status in ['start', 'continue', 'partial']) and (
-                    beam_status in ['continue', 'stop', 'partial']):
-                if beam_status == 'stop':
+            """fix it that the criteria for being evaluated isnt necesarily just three elements
 
+make it so that it checks first if its currently beamed, if it is, then keep adding elements until the beam is done, and then i fbeam ends, then thats when you evaluate
+if its not beamed, then follow the normal rules"""
+            if (last_beam_status in ['start', 'continue', 'partial']) and (beam_status in ['continue', 'stop', 'partial']):
+                if beam_status == 'stop':
                     # TODO: REVISIT IF IT IS WEIRD
                     if len(current_group) == 2:
                         i += 1
