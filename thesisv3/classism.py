@@ -58,7 +58,7 @@ class MusicSegmentAnalyzer:
         ir_symbols = assign_ir_symbols(narr)
         self.ir_symbols = ir_symbols
         ir_nmat = ir_symbols_to_matrix(ir_symbols, nmat)
-        ir_nmat = assign_ir_pattern_indices(ir_nmat)
+        # ir_nmat = assign_ir_pattern_indices(ir_nmat)
         self.segments = segmentgestalt(ir_nmat)
         return self
 

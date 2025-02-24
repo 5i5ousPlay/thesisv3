@@ -302,7 +302,7 @@ def assign_ir_symbols_old(note_array):
 
 
 # TODO: ir symbol assignment accounting slurred notes. Using this would require updating ir index assignment as well
-def assign_ir_symbols(note_array):
+def assign_ir_symbols_second_old(note_array):
     """
     Assigns IR symbols and colors to each element in the score array.
 
@@ -375,10 +375,6 @@ def assign_ir_symbols(note_array):
                 group_pitches.append(element.root().ps)
 
             # BEAM
-            """fix it that the criteria for being evaluated isnt necesarily just three elements
-
-make it so that it checks first if its currently beamed, if it is, then keep adding elements until the beam is done, and then i fbeam ends, then thats when you evaluate
-if its not beamed, then follow the normal rules"""
             if (last_beam_status in ['start', 'continue', 'partial']) and (beam_status in ['continue', 'stop', 'partial']):
                 if beam_status == 'stop':
                     # TODO: REVISIT IF IT IS WEIRD
@@ -425,6 +421,184 @@ if its not beamed, then follow the normal rules"""
         evaluate_current_group()
 
     return symbols
+
+
+def assign_ir_symbols(note_array):
+    """
+    Assigns IR symbols, colors, and pattern indices to each element in the note array.
+    Groups elements based on beam criteria and adjacent non-beamed elements, then assigns
+    a unique pattern index to each group. For groups with three or more elements, the first
+    two intervals are used to calculate the IR symbol (via calculate_ir_symbol). Two-element
+    groups are labeled as dyads ('d'), and single elements as monads ('M').
+
+    Parameters:
+        note_array (list): A list of music21 note and chord elements.
+
+    Returns:
+        list: A list of tuples (element, ir_symbol, color, pattern_index) for each element.
+    """
+    symbols = []  # Will hold tuples: (element, ir_symbol, color, pattern_index)
+    current_group = []
+    group_pitches = []
+
+    # Map IR symbols to colors.
+    color_map = {
+        'P': 'blue',      # IR1: P (Process)
+        'D': 'green',     # IR2: D (Duplication)
+        'IP': 'red',      # IR3: IP (Intervallic Process)
+        'ID': 'orange',   # IR4: ID (Intervallic Duplication)
+        'VP': 'purple',   # IR5: VP (Vector Process)
+        'R': 'cyan',      # IR6: R (Reversal)
+        'IR': 'magenta',  # IR7: IR (Intervallic Reversal)
+        'VR': 'yellow',   # IR8: VR (Vector Reversal)
+        'M': 'pink',      # IR9: M (Monad)
+        'd': 'lime',      # IR10: d (Dyad)
+    }
+
+    # Define which beam statuses indicate a beamed element.
+    beamed_set = ['start', 'continue', 'partial', 'stop']
+
+    # This will count groups as we evaluate them.
+    pattern_index = 0
+
+    def evaluate_current_group():
+        nonlocal pattern_index
+        if not current_group:
+            return
+        if len(current_group) >= 3:
+            # Use the first two intervals to determine the IR symbol.
+            interval1 = group_pitches[1] - group_pitches[0]
+            interval2 = group_pitches[2] - group_pitches[1]
+            symbol = calculate_ir_symbol(interval1, interval2)
+            color = color_map.get(symbol, 'black')
+            symbols.extend([(elem, symbol, color, pattern_index) for elem in current_group])
+        elif len(current_group) == 2:
+            symbols.extend([(elem, 'd', color_map['d'], pattern_index) for elem in current_group])
+        elif len(current_group) == 1:
+            symbols.extend([(elem, 'M', color_map['M'], pattern_index) for elem in current_group])
+        pattern_index += 1
+        current_group.clear()
+        group_pitches.clear()
+
+    def get_beam_status(e):
+        """
+        Determines the beam status of a note or chord.
+        Returns:
+            'start', 'continue', 'stop', 'partial', or 'single' if not beamed.
+        """
+        from music21 import note, chord
+        if not isinstance(e, (note.Note, chord.Chord)):
+            return None
+        beam_status = 'single'  # Default for unbeamed notes.
+        if e.beams:
+            beam_types = [beam.type for beam in e.beams.beamsList]
+            if 'start' in beam_types:
+                beam_status = 'start'
+            elif 'continue' in beam_types:
+                beam_status = 'continue'
+            elif 'stop' in beam_types:
+                beam_status = 'stop'
+            elif 'partial' in beam_types:
+                beam_status = 'partial'
+        return beam_status
+
+    num_notes = len(note_array)
+    i = 0
+    from music21 import note, chord  # Ensure these types are available.
+    while i < num_notes:
+        element = note_array[i]
+        if isinstance(element, (note.Note, chord.Chord)):
+            beam_status = get_beam_status(element)
+            if beam_status in beamed_set:
+                # If the element is beamed, collect all contiguous beamed elements.
+                current_group.append(element)
+                if isinstance(element, note.Note):
+                    group_pitches.append(element.pitch.ps)
+                elif isinstance(element, chord.Chord):
+                    group_pitches.append(element.root().ps)
+                i += 1
+                while i < num_notes:
+                    next_element = note_array[i]
+                    if not isinstance(next_element, (note.Note, chord.Chord)):
+                        break
+                    next_beam_status = get_beam_status(next_element)
+                    if next_beam_status in beamed_set:
+                        current_group.append(next_element)
+                        if isinstance(next_element, note.Note):
+                            group_pitches.append(next_element.pitch.ps)
+                        elif isinstance(next_element, chord.Chord):
+                            group_pitches.append(next_element.root().ps)
+                        i += 1
+                        if next_beam_status == 'stop':
+                            break
+                    else:
+                        break
+                # For beamed groups: if the group is exactly size 2 and the next element is non-beamed,
+                # merge it.
+                if len(current_group) == 2 and i < num_notes:
+                    if get_beam_status(note_array[i]) == 'single':
+                        next_element = note_array[i]
+                        current_group.append(next_element)
+                        if isinstance(next_element, note.Note):
+                            group_pitches.append(next_element.pitch.ps)
+                        elif isinstance(next_element, chord.Chord):
+                            group_pitches.append(next_element.root().ps)
+                        i += 1
+                evaluate_current_group()
+                continue  # Already advanced i.
+            else:
+                # For non-beamed elements, add them to the current group.
+                current_group.append(element)
+                if isinstance(element, note.Note):
+                    group_pitches.append(element.pitch.ps)
+                elif isinstance(element, chord.Chord):
+                    group_pitches.append(element.root().ps)
+                # Look ahead: if the next element starts a beamed group,
+                # check if that contiguous beamed group is exactly of size 2.
+                if i < num_notes - 1:
+                    next_element = note_array[i+1]
+                    if get_beam_status(next_element) in beamed_set:
+                        temp_index = i + 1
+                        temp_group = []
+                        while temp_index < num_notes and get_beam_status(note_array[temp_index]) in beamed_set:
+                            temp_group.append(note_array[temp_index])
+                            temp_index += 1
+                        if len(temp_group) == 2:
+                            # Merge the two beamed elements into the current group.
+                            for elem in temp_group:
+                                current_group.append(elem)
+                                if isinstance(elem, note.Note):
+                                    group_pitches.append(elem.pitch.ps)
+                                elif isinstance(elem, chord.Chord):
+                                    group_pitches.append(elem.root().ps)
+                            i = temp_index
+                            evaluate_current_group()
+                            continue
+                        elif len(temp_group) > 2:
+                            # Do NOT merge: evaluate the current group (which holds just the non-beamed element)
+                            evaluate_current_group()
+                            i += 1  # Increment to avoid reprocessing the same element.
+                            continue
+                # If the non-beamed group grows by itself, evaluate it.
+                if len(current_group) >= 3:
+                    evaluate_current_group()
+                i += 1
+        elif isinstance(element, note.Rest):
+            if current_group:
+                evaluate_current_group()
+            symbols.append((element, 'rest', 'black', pattern_index))
+            pattern_index += 1
+            i += 1
+        else:
+            if current_group:
+                evaluate_current_group()
+            i += 1
+
+    if current_group:
+        evaluate_current_group()
+
+    return symbols
+
 
 
 def visualize_notes_with_symbols(notes_with_symbols, original_score):
@@ -478,8 +652,9 @@ def ir_symbols_to_matrix(note_array, note_matrix):
     Returns:
     pd.DataFrame: The updated DataFrame with assigned IR symbols.
     """
-    for pointer, (note_data, ir_symbol, color) in enumerate(note_array):
+    for pointer, (note_data, ir_symbol, color, index) in enumerate(note_array):
         note_matrix.at[pointer, 'ir_symbol'] = ir_symbol
+        note_matrix.at[pointer, 'pattern_index'] = index
     return note_matrix
 
 
@@ -677,7 +852,6 @@ def segmentgestalt(notematrix):
     if notematrix.empty:
         return None
 
-    notematrix = assign_ir_pattern_indices(notematrix)
     clind, clb = calculate_clang_boundaries(notematrix)
     s = calculate_segment_boundaries(notematrix, clind)
     s = adjust_segment_boundaries(notematrix, s)
