@@ -1,4 +1,5 @@
 import pickle
+import traceback
 
 import music21
 from music21 import converter, environment
@@ -191,6 +192,6 @@ class GraphBatcher:
 
             except Exception as e:
                 print(f"Error parsing: {file} at {self.file_manager.files[file]}. Skipping file")
-                print(e)
+                print(traceback.format_exc())
                 continue
 
