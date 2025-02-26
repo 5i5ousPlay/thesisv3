@@ -672,37 +672,58 @@ def visualize_score_with_colored_segments(original_score, segments):
     return new_score
 
 
-def visualize_notes_with_symbols(notes_with_symbols, original_score):
+def visualize_notes_with_symbols(notes_with_symbols, original_score, all_parts=False):
     """
     Visualizes notes with their assigned IR symbols and colors in a music21 score.
 
     Parameters:
-    notes_with_symbols (list): A list of tuples containing each element, its IR symbol, and its color.
-    original_score (music21.stream.Score): The original music21 score to replicate structural attributes.
+        notes_with_symbols (list): A list of tuples containing (element, symbol, color).
+        original_score (music21.stream.Score): The original score used as template.
 
     Returns:
-    None
+        music21.stream.Score: A new score with annotated symbols and colors.
     """
     # Make a deep copy of the original score to preserve its structure
     new_score = copy.deepcopy(original_score)
+    parts_to_process = new_score.parts if hasattr(new_score, 'parts') else [new_score]
+    if not all_parts and hasattr(new_score, 'parts'):
+        parts_to_process = [new_score.parts[0]]
 
-    # Flatten notes_with_symbols for easy indexing
+    # Create an iterator over the provided symbols list
     symbols_iter = iter(notes_with_symbols)
 
-    # Iterate over the parts of the new_score
-    for part in new_score.parts:
-        # Iterate over measures in the part
+    for part in parts_to_process:
         for measure in part.getElementsByClass(stream.Measure):
-            # Iterate over elements in the measure
+            # Process each element in the measure
             for element in measure:
-                if isinstance(element, (note.Note, note.Rest, chord.Chord)):
+                # If the element is a Voice, process its subelements.
+                if isinstance(element, stream.Voice):
+                    # if (element.id is not None and element.id != '1'):
+                    #     continue
+                    for subelement in element.flatten().getElementsByClass([note.Note, note.Rest, chord.Chord]):
+                        try:
+                            symbol_element, symbol, color, _ = next(symbols_iter)
+                            # Apply color and add lyric if the elements match.
+                            if subelement == symbol_element:
+                                subelement.style.color = color
+                                subelement.lyric = symbol
+                            else:
+                                print(f"Expected: {symbol_element}, Found: {element}")
+                        except StopIteration:
+                            print(f"stopping {element}")
+                            break  # No more symbols to assign.
+                # Process standalone elements (notes, rests, chords).
+                elif isinstance(element, (note.Note, note.Rest, chord.Chord)):
                     try:
-                        symbol_element, symbol, color = next(symbols_iter)
-                        # Apply color and lyric if the elements match
+                        symbol_element, symbol, color, _ = next(symbols_iter)
                         if element == symbol_element:
                             element.style.color = color
                             element.lyric = symbol
+                        else:
+                            print(f"Expected: {symbol_element}, Found: {element}")
                     except StopIteration:
-                        break  # No more symbols to assign
-
+                        print(f"stopping {element}")
+                        break
+                else:
+                    print(element)
     return new_score
