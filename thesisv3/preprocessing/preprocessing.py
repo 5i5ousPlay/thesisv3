@@ -1052,16 +1052,29 @@ def tessitura(nmat:pd.DataFrame):
 def calculate_note_expectancy_scores(nmat: pd.DataFrame) -> np.ndarray:
     w1 = 0.7
     w2 = 0.3
+    alpha = 1
+    beta = 1
+    gamma = 10
+    b = 0
 
     # nmat['tessitura'].replace([np.inf, -np.inf], np.nan, inplace=True)
     # nmat['mobility'].replace([np.inf, -np.inf], np.nan, inplace=True)
     # nmat.fillna(nmat.mean(), inplace=True)
 
-    scaler = MinMaxScaler()
-    normalized_tessitura = scaler.fit_transform(nmat[['tessitura']])
-    normalized_mobility = scaler.fit_transform(nmat[['mobility']])
-    raw_expectancy = w1 * (1 - normalized_tessitura) + w2 * normalized_mobility
-    expectancy_scores = 0.5 + 0.5 * (raw_expectancy - 0.5)
+    tessitura_scaler = MinMaxScaler()
+    mobility_scaler = MinMaxScaler()
+    normalized_tessitura = tessitura_scaler.fit_transform(nmat[['tessitura']])
+    normalized_mobility = mobility_scaler.fit_transform(nmat[['mobility']])
+
+    # hard sigmoid implementation
+    s = (alpha * normalized_mobility) - (beta * normalized_tessitura)
+    s = np.clip(s, -5, 5)
+
+    expectancy_scores = 1 / (1 + np.exp(-gamma * (s - b)))
+
+    # commented out soft-sigmoid
+    # raw_expectancy = w1 * (1 - normalized_tessitura) + w2 * normalized_mobility
+    # expectancy_scores = 0.5 + 0.5 * (raw_expectancy - 0.5)
 
     # Adjust first two notes
     expectancy_scores[0] = 0.5
