@@ -104,7 +104,8 @@ class MusicSegmentAnalyzer:
             raise ValueError("No score path provided")
 
         self.parsed_score = converter.parse(self.score_path)
-        self.parsed_score = self.parsed_score.makeNotation()
+        # self.parsed_score = self.parsed_score.makeNotation()
+        # self.parsed_score = self.parsed_score.makeMeasures()
         # self.parsed_score = custom_chordify(self.parsed_score)
         # self.parsed_score = self.parsed_score.chordify()
         # self.parsed_score = unchordify_singletons(self.parsed_score)

@@ -113,16 +113,15 @@ def parse_score_elements_old(score: stream.Score, all_parts: bool = False) -> tu
 
     Returns:
     tuple: A tuple containing:
-        - pd.DataFrame: A DataFrame with onset (global and relative to measure), duration, MIDI pitch,
-                        pitch class, octave, and beat strength for each note.
+        - pd.DataFrame: A DataFrame with onset (global and relative to measure), duration, MIDI pitch, pitch class, octave, and beat strength for each note.
         - list: A list of note and chord elements.
         - list: A list of all elements processed.
     """
     trashed_elements = 0
-    narr = []  # List for successfully processed note/chord/rest elements
-    sarr = []  # List for all elements encountered
+    narr = []
+    sarr = []
     nmat = pd.DataFrame(columns=[
-        'onset_beats',  # Global onset in beats for the whole piece
+        'onset_beats',  # Onset in beats for the whole piece
         'onset_beats_in_measure',  # Onset relative to the measure
         'duration_beats',
         'midi_pitch',
@@ -132,66 +131,77 @@ def parse_score_elements_old(score: stream.Score, all_parts: bool = False) -> tu
     ])
 
     onset_beat = 0
-    parts_to_process = score.parts if all_parts else [score.parts[0]]
-
-    # Helper function to process a single musical element (note, chord, or rest)
-    def process_element(e, current_onset):
-        duration = e.duration.quarterLength
-        beat_strength = getattr(e, 'beatStrength', None)
-        # Use the element's own offset for the onset within its measure
-        onset_in_measure = e.offset
-        if isinstance(e, chord.Chord):
-            root = e.root()
-            midi_pitch = root.midi
-            pitch_class = root.pitchClass
-            octave = root.octave
-        elif isinstance(e, note.Note):
-            midi_pitch = e.pitch.midi
-            pitch_class = e.pitch.pitchClass
-            octave = e.pitch.octave
-        elif isinstance(e, note.Rest):
-            midi_pitch = 0
-            pitch_class = 0
-            octave = 0
-        else:
-            return None, 0
-        row = [current_onset, onset_in_measure, duration, midi_pitch, pitch_class, octave, beat_strength]
-        return row, duration
+    parts_to_process = score.parts if hasattr(score, 'parts') else [score]
+    if not all_parts and hasattr(score, 'parts'):
+        parts_to_process = [score.parts[0]]
 
     for part in parts_to_process:
         for measure in part.getElementsByClass(stream.Measure):
-            # Process only the first Voice in the measure (if any)
-            voice_processed = False
+            measure_offset_in_score = measure.getOffsetInHierarchy(score)
             for element in measure:
                 sarr.append(element)
-                if isinstance(element, stream.Voice):
-                    # Process only if the voice's id is "1" or if no id is set and no voice has been processed yet
-                    # if (element.id is not None and element.id != '1') or voice_processed:
-                    #     continue
-                    voice_processed = True
-                    # Process all valid subelements in the voice
-                    for subelement in element.flatten().getElementsByClass([note.Note, chord.Chord, note.Rest]):
-                        row, dur = process_element(subelement, onset_beat)
-                        if row is not None:
-                            nmat.loc[len(nmat)] = row
-                            narr.append(subelement)
-                        else:
-                            trashed_elements += 1
-                        onset_beat += dur
+                # Onset relative to the measure
+                onset_beat_in_measure = element.offset
+                # Onset relative to the whole piece
+                duration_beats = element.duration.quarterLength
+
+                # Beat strength calculation
+                beat_strength = element.beatStrength if hasattr(element, 'beatStrength') else None
+
+                if isinstance(element, chord.Chord):
+                    # Use the root note of the chord
+                    root_note = element.root()
+                    pitch_class = root_note.pitchClass
+                    octave = root_note.octave
+                    midi_pitch = root_note.midi
+                    row = [
+                        onset_beat,
+                        onset_beat_in_measure,
+                        duration_beats,
+                        midi_pitch,
+                        pitch_class,
+                        octave,
+                        beat_strength
+                    ]
+                    nmat.loc[len(nmat)] = row
+                    narr.append(element)
+                elif isinstance(element, note.Rest):
+                    # Represent rest with None for pitch attributes
+                    row = [
+                        onset_beat,
+                        onset_beat_in_measure,
+                        duration_beats,
+                        0,
+                        0,
+                        0,
+                        beat_strength
+                    ]
+                    nmat.loc[len(nmat)] = row
+                    narr.append(element)
+                elif isinstance(element, note.Note):
+                    pitch_class = element.pitch.pitchClass
+                    octave = element.pitch.octave
+                    midi_pitch = element.pitch.midi
+                    row = [
+                        onset_beat,
+                        onset_beat_in_measure,
+                        duration_beats,
+                        midi_pitch,
+                        pitch_class,
+                        octave,
+                        beat_strength
+                    ]
+                    nmat.loc[len(nmat)] = row
+                    narr.append(element)
                 else:
-                    row, dur = process_element(element, onset_beat)
-                    if row is not None:
-                        nmat.loc[len(nmat)] = row
-                        narr.append(element)
-                    else:
-                        trashed_elements += 1
-                    onset_beat += dur
+                    trashed_elements += 1
+                onset_beat += duration_beats
 
     return nmat, narr, sarr
 
 
 
-
+# Ideally use this version to have more correct onsets, but it's currently giving unreadable durations so idk yet
 def parse_score_elements(score: stream.Score, all_parts: bool = False) -> tuple[pd.DataFrame, list, list]:
     """
     Parses a music21 score object into a DataFrame of note attributes and lists of note and chord elements.
@@ -301,8 +311,7 @@ def calculate_ir_symbol(interval1, interval2, threshold=5):
         return 'P'  # Process
     elif interval1 == interval2 == 0:
         return 'D'  # Duplication
-    elif (interval1 * interval2 < 0) and (-threshold <= abs_difference <= threshold) and (
-            abs(interval2) != abs(interval1)):
+    elif (direction < 0) and (-threshold <= abs_difference <= threshold) and (abs(interval2) != abs(interval1)):
         return 'IP'  # Intervallic Process
     elif (interval1 * interval2 < 0) and (abs(interval2) == abs(interval1)):
         return 'ID'  # Intervallic Duplication
@@ -485,7 +494,6 @@ def assign_ir_symbols(note_array):
         evaluate_current_group()
 
     return symbols
-
 
 # This version incorrectly treats beamed notes as one group.
 def assign_ir_symbols_too_complicated(note_array):

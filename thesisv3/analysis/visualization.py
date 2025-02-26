@@ -726,4 +726,5 @@ def visualize_notes_with_symbols(notes_with_symbols, original_score, all_parts=F
                         break
                 else:
                     print(element)
+
     return new_score
