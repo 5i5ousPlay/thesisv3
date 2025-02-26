@@ -34,6 +34,69 @@ class MusicSegmentAnalyzer:
         self.ir_symbols = None
 
     def load_score(self, score_path=None):
+        def custom_chordify(score, tolerance=0.001):
+            """
+            Creates a new score where simultaneous notes across voices
+            (within a given time tolerance) are merged into chords.
+            Single notes remain as note.Note objects.
+
+            Parameters:
+                score (music21.stream.Score): The original score.
+                tolerance (float): Tolerance for grouping onsets (in quarter lengths).
+
+            Returns:
+                music21.stream.Score: A new score with merged simultaneous notes.
+            """
+            # Clone the score so we don't modify the original
+            new_score = copy.deepcopy(score)
+
+            # Determine if new_score has parts; if not, treat it as a single part.
+            parts_to_process = new_score.parts if hasattr(new_score, 'parts') else [new_score]
+
+            # Process each part separately
+            for part in parts_to_process:
+                # Process each measure individually to preserve structure
+                for meas in part.getElementsByClass('Measure'):
+                    # Get all Note and Rest objects in this measure (from all voices)
+                    events = meas.recurse().getElementsByClass([note.Note, note.Rest])
+                    # Group events by their offset within the measure
+                    offset_groups = {}
+                    for ev in events:
+                        # Round the offset to the nearest tolerance unit.
+                        off_key = round(ev.offset / tolerance) * tolerance
+                        offset_groups.setdefault(off_key, []).append(ev)
+
+                    # For each offset group, if there are two or more notes, merge them.
+                    for off, group in offset_groups.items():
+                        # Filter out rests – usually you want to chordify only the sounding pitches.
+                        note_group = [n for n in group if isinstance(n, note.Note)]
+                        if len(note_group) >= 2:
+                            # Create a chord from the grouped notes.
+                            new_chord = chord.Chord(note_group)
+                            # Choose a duration (for example, take the duration of the first note)
+                            new_chord.duration = note_group[0].duration
+                            # Optionally, you might transfer other attributes (e.g., tie, articulation)
+
+                            # Remove the original notes from their parent containers.
+                            for n in note_group:
+                                if n.activeSite is not None:
+                                    n.activeSite.remove(n)
+                            # Insert the chord at the given offset into the measure.
+                            meas.insert(off, new_chord)
+
+            return new_score
+
+        def unchordify_singletons(chordified_score):
+            for c in chordified_score.recurse().getElementsByClass(chord.Chord):
+                # If chord has only one pitch, replace it with a Note.
+                if len(c.pitches) == 1:
+                    n = note.Note(c.pitches[0])
+                    n.duration = c.duration
+                    n.offset = c.offset
+                    # Replace the chord with the note in its parent container.
+                    c.activeSite.replace(c, n)
+            return chordified_score
+
         """Load and parse a music score"""
         if score_path:
             self.score_path = score_path
@@ -41,7 +104,13 @@ class MusicSegmentAnalyzer:
             raise ValueError("No score path provided")
 
         self.parsed_score = converter.parse(self.score_path)
+        self.parsed_score = self.parsed_score.makeNotation()
+        # self.parsed_score = custom_chordify(self.parsed_score)
+        # self.parsed_score = self.parsed_score.chordify()
+        # self.parsed_score = unchordify_singletons(self.parsed_score)
         return self
+
+
 
     def analyze_segments(self):
         """Perform segment analysis on the loaded score"""
