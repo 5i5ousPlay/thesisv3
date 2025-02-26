@@ -78,6 +78,27 @@ TODO: Al can put the installation things that need to be done to get musescore /
 running properly
 
 
+## Problematic Dependencies
+### Karate Club
+Karate club dependencies declare that it need numpy < 1.23.0. It works just
+fine with newer numpy versions. In order to use the GraphKMeans clustering class,
+install karate club in one of these two ways
+#### Method 1:
+```commandline
+pip install karateclub --no-deps
+```
+#### Method 2:
+Do a proper install of karateclub. This will overwrite some of this library's dependencies.
+```commandline
+pip install karateclub
+```
+Then reinstall the correct dependencies for this library:
+```commandline
+pip install numpy==1.26.4
+pip install networkx==3.4.2
+pip install pandas==2.2.3
+```
+
 # Importing the Library
 
 Make sure that wherever you're coding it's on the same level as the 

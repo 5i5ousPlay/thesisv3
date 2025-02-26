@@ -172,6 +172,7 @@ class GraphBatcher:
         self.graphs = []
         self.segments = []
         self.distance_matrices = []
+        self.processed_files = []
         self.file_manager = MusicFileManager()
         self.analyzer = MusicSegmentAnalyzer()
 
@@ -186,6 +187,7 @@ class GraphBatcher:
                 self.graphs.append(builder.construct_graph())
                 self.segments.append(self.analyzer.prepped_segments)
                 self.distance_matrices.append(self.analyzer.distance_matrix)
+                self.processed_files.append(file)
 
             except Exception as e:
                 print(f"Error parsing: {file} at {self.file_manager.files[file]}. Skipping file")
