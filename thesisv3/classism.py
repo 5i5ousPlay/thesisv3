@@ -1,5 +1,5 @@
-import os
 import pickle
+import os
 import traceback
 
 import music21
@@ -9,6 +9,7 @@ from thesisv3.analysis.visualization import *
 from thesisv3.preprocessing.preprocessing import *
 from thesisv3.building.building import distance_matrix_to_knn_graph_scaled
 from thesisv3.utils.file_manager import MusicFileManager
+from thesisv3.utils.helpers import save_to_pickle
 
 # Configure MuseScore paths
 env = environment.Environment()
@@ -66,12 +67,19 @@ class MusicSegmentAnalyzer:
 
             for piece in os.listdir(self.score_path):
                 piece_path = os.path.join(self.score_path, piece)
+
                 if not os.path.isfile(piece_path):
                     continue
 
                 try:
                     parsed_score = converter.parse(piece_path)
                     nmat, narr, sarr = parse_score_elements(parsed_score)
+
+                    # Process individual file
+                    ir_symbols = assign_ir_symbols(narr)
+                    self.ir_symbols.extend(ir_symbols)
+                    ir_nmat = ir_symbols_to_matrix(ir_symbols, nmat)
+                    segments = segmentgestalt(ir_nmat)
 
                     # Concatenate data from multiple files
                     if combined_nmat is None:
@@ -82,12 +90,6 @@ class MusicSegmentAnalyzer:
 
                     combined_narr.extend(narr)
                     combined_sarr.extend(sarr)
-
-                    # Process individual file
-                    ir_symbols = assign_ir_symbols(narr)
-                    self.ir_symbols.extend(ir_symbols)
-                    ir_nmat = ir_symbols_to_matrix(ir_symbols, nmat)
-                    segments = segmentgestalt(ir_nmat)
                     self.segments.extend(segments)
                 except Exception as e:
                     print(f"Error processing {piece_path}: {e}")
@@ -103,14 +105,16 @@ class MusicSegmentAnalyzer:
             # nmat['mobility'] = mobility(nmat) # calculate mobility and add column to raw nmat
             # nmat['tessitura'] = tessitura(nmat) # calculate tessitura and add column to raw nmat
             # nmat['expectancy'] = calculate_note_expectancy_scores(nmat)
-            self.nmat = nmat  # save raw nmat
-            self.narr = narr
-            self.sarr = sarr
+
             ir_symbols = assign_ir_symbols(narr)
             self.ir_symbols = ir_symbols
             ir_nmat = ir_symbols_to_matrix(ir_symbols, nmat)
             # ir_nmat = assign_ir_pattern_indices(ir_nmat)
             self.segments = segmentgestalt(ir_nmat)
+
+            self.nmat = nmat  # save raw nmat
+            self.narr = narr
+            self.sarr = sarr
         return self
 
     def preprocess_segments(self):
@@ -233,30 +237,113 @@ class GraphBuilder:
 
 
 class GraphBatcher:
-    def __init__(self, k=5):
+    def __init__(self, k=5, output_dir='./batcher_output'):
         self.k = k
         self.graphs = []
+        self.graph_dict = {}
+
         self.segments = []
+        self.segment_dict = {}
+
         self.distance_matrices = []
+        self.distmat_dict = {}
+
         self.processed_files = []
         self.file_manager = MusicFileManager()
         self.analyzer = MusicSegmentAnalyzer()
 
+        # Create output directory if it doesn't exist
+        self.output_dir = output_dir
+        os.makedirs(self.output_dir, exist_ok=True)
+
+        # Define paths for each pickle file
+        self.graphs_path = os.path.join(self.output_dir, 'graphs.pkl')
+        self.segments_path = os.path.join(self.output_dir, 'segments.pkl')
+        self.distmat_path = os.path.join(self.output_dir, 'distance_matrices.pkl')
+        self.processed_files_path = os.path.join(self.output_dir, 'processed_files.pkl')
+
+        # Load previous progress if it exists
+        self.load_progress()
+
     def batch(self):
         for file in self.file_manager.files:
+            # Skip files we've already processed
+            if file in self.processed_files:
+                print(f"Skipping already processed file: {file}")
+                continue
+
             print(f"Analyzing {file}")
             try:
                 self.analyzer.run(self.file_manager.files[file])
                 builder = GraphBuilder(self.k,
                                        self.analyzer.distance_matrix,
                                        self.analyzer.prepped_segments)
-                self.graphs.append(builder.construct_graph())
+
+                # Create the graph
+                graph = builder.construct_graph()
+
+                # Add to lists
+                self.graphs.append(graph)
                 self.segments.append(self.analyzer.prepped_segments)
                 self.distance_matrices.append(self.analyzer.distance_matrix)
                 self.processed_files.append(file)
+
+                # Add to dictionaries with file as key
+                self.graph_dict[file] = graph
+                self.segment_dict[file] = self.analyzer.prepped_segments
+                self.distmat_dict[file] = self.analyzer.distance_matrix
+
+                # Save progress after each file
+                self.save_progress()
 
             except Exception as e:
                 print(f"Error parsing: {file} at {self.file_manager.files[file]}. Skipping file")
                 print(traceback.format_exc())
                 continue
 
+    def save_progress(self):
+        """Save each variable to its own pickle file, overwriting previous versions."""
+
+        # Helper function for safe saving
+        def safe_save(data, path):
+            temp_path = f"{path}.tmp"
+            with open(temp_path, 'wb') as f:
+                pickle.dump(data, f)
+            if os.path.exists(path):
+                os.remove(path)
+            os.rename(temp_path, path)
+
+        # Save each dictionary to its own file
+        safe_save(self.graph_dict, self.graphs_path)
+        safe_save(self.segment_dict, self.segments_path)
+        safe_save(self.distmat_dict, self.distmat_path)
+        safe_save(self.processed_files, self.processed_files_path)
+
+        print(f"Progress saved: {len(self.processed_files)} files processed")
+
+    def load_progress(self):
+        """Load previous progress from individual pickle files if available."""
+
+        # Helper function for safe loading
+        def safe_load(path, default_value):
+            if os.path.exists(path):
+                try:
+                    with open(path, 'rb') as f:
+                        return pickle.load(f)
+                except Exception as e:
+                    print(f"Error loading {path}: {e}")
+            return default_value
+
+        # Load each dictionary from its own file
+        self.graph_dict = safe_load(self.graphs_path, {})
+        self.segment_dict = safe_load(self.segments_path, {})
+        self.distmat_dict = safe_load(self.distmat_path, {})
+        self.processed_files = safe_load(self.processed_files_path, [])
+
+        # Rebuild the lists from the dictionaries
+        if self.processed_files:
+            self.graphs = [self.graph_dict[f] for f in self.processed_files]
+            self.segments = [self.segment_dict[f] for f in self.processed_files]
+            self.distance_matrices = [self.distmat_dict[f] for f in self.processed_files]
+
+            print(f"Loaded previous progress: {len(self.processed_files)} files already processed")
