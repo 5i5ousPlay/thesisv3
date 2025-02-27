@@ -112,20 +112,16 @@ class MusicSegmentAnalyzer:
         # self.parsed_score = unchordify_singletons(self.parsed_score)
         return self
 
-
-
     def analyze_segments(self):
         """Perform segment analysis on the loaded score"""
         if not self.parsed_score:
             raise ValueError("No score loaded. Call load_score first.")
 
         nmat, narr, sarr = parse_score_elements(self.parsed_score)
-        nmat['mobility'] = mobility(nmat)  # calculate mobility and add column to raw nmat
-        nmat['tessitura'] = tessitura(nmat)  # calculate tessitura and add column to raw nmat
-        nmat['expectancy'] = calculate_note_expectancy_scores(nmat)
-        self.nmat = nmat  # save raw nmat
-        self.narr = narr
-        self.sarr = sarr
+        # nmat['mobility'] = mobility(nmat) # calculate mobility and add column to raw nmat
+        # nmat['tessitura'] = tessitura(nmat) # calculate tessitura and add column to raw nmat
+        # nmat['expectancy'] = calculate_note_expectancy_scores(nmat)
+        self.nmat = nmat # save raw nmat
         ir_symbols = assign_ir_symbols(narr)
         self.ir_symbols = ir_symbols
         ir_nmat = ir_symbols_to_matrix(ir_symbols, nmat)
@@ -229,8 +225,9 @@ class GraphBuilder:
         knn_graph = kneighbors_graph(self.distance_matrix, n_neighbors=self.k, mode='connectivity')
         G = nx.from_scipy_sparse_array(knn_graph)
 
-        for i in range(len(self.segments)):
-            G.nodes[i]['label'] = np.round(self.segments[i]['expectancy'].mean(), decimals=2)
+        # for i in range(len(self.segments)):
+        #     G.nodes[i]['label'] = np.round(self.segments[i]['expectancy'].mean(), decimals=2)
+        #     G.nodes[i]['label'] = i
 
         if not nx.is_connected(G):
             print("The KNN graph is disjoint. Ensuring connectivity...")
@@ -278,3 +275,4 @@ class GraphBatcher:
                 print(f"Error parsing: {file} at {self.file_manager.files[file]}. Skipping file")
                 print(traceback.format_exc())
                 continue
+
