@@ -19,38 +19,32 @@ class MusicFileManager:
         """Initialize the mapping of display names to file paths"""
         files_dict = {}
 
-        # Walk through the root directory and immediate subdirectories
-        for dirpath, dirnames, filenames in os.walk(self.base_path):
-            # Get current directory depth relative to root directory
-            depth = dirpath[len(self.base_path):].count(os.sep)
+        # Process files in the root directory
+        for filename in os.listdir(self.base_path):
+            full_path = os.path.join(self.base_path, filename)
 
-            # Only process if we're in root dir or one level below
-            if depth <= 1:
-                for filename in filenames:
-                    # Create full filepath
-                    full_path = os.path.join(dirpath, filename)
-                    # Add to dictionary
-                    files_dict[filename] = full_path
-            else:
-                # Skip deeper subdirectories
-                continue
+            # If it's a file, add it directly
+            if os.path.isfile(full_path):
+                files_dict[filename] = full_path
+
+            # If it's a directory, process its contents
+            elif os.path.isdir(full_path):
+                subdir_name = filename
+                subdir_path = full_path
+
+                # Process files in the immediate subdirectory
+                for subfile in os.listdir(subdir_path):
+                    sub_full_path = os.path.join(subdir_path, subfile)
+
+                    # If it's a file, add it with its path
+                    if os.path.isfile(sub_full_path):
+                        files_dict[subfile] = sub_full_path
+
+                    # If it's a directory, just add the directory path (don't go deeper)
+                    elif os.path.isdir(sub_full_path):
+                        files_dict[subfile] = sub_full_path
 
         return files_dict
-        # return {
-        #     "Bach - Minuet in G Major": r".\music_database\Bach_-_Minuet_in_G_Major_Bach.mxl",
-        #     "Beethoven - Piano Sonata No. 20 in G Major Op. 49 1st Movement": r".\music_database\Beethoven_-_Piano_Sonata_No._20_in_G_Major_Op._49_1st_Movement.mxl",
-        #     "Chopin - Ballade No.1 in G minor Op. 23 violin": r".\music_database\Chopin_-_Ballade_No.1_in_G_minor_Op._23_violin.mxl",
-        #     "Chopin - Etude Op.10 No.1 Waterfall in C Major": r".\music_database\Chopin_-_Etude_Op.10_No.1_Waterfall_Chopin_in_C_Major.mxl",
-        #     "Chopin - Etude Op.25 No.11 in A minor Winter Wind": r".\music_database\Chopin_-_Etude_Op.25_No.11_in_A_minor_Winter_Wind_-_F._Chopin.mxl",
-        #     "Chopin - Nocturne Op.9 No.2 in E Flat Major": r".\music_database\Chopin_-_Nocturne_Op.9_No.2_E_Flat_Major.mxl",
-        #     "Chopin - Waltz Opus 64 No.1 in D Major Minute Waltz": r".\music_database\Chopin_-_Waltz_Opus_64_No._1_in_D_Major_Minute_Waltz.mxl",
-        #     "Chopin - Waltz Opus 64 No.2 in C Minor": r".\music_database\Chopin_-_Waltz_Opus_64_No._2_in_C_Minor.mxl",
-        #     "Chopin - Waltz Opus 69 No.1 in A Major": r".\music_database\Chopin_-_Waltz_Opus_69_No._1_in_A_Major.mxl",
-        #     "Mozart - Menuett in G Major": r".\music_database\Mozart_-_Menuett_in_G_Major.mxl",
-        #     "Mozart - Piano Sonata No.11 K.331 3rd Movement Rondo alla Turca": r".\music_database\Mozart_-_Piano_Sonata_No._11_K_331_3rd_Movement_Rondo_alla_Turca.mxl",
-        #     "Mozart - Sonata No.10 1st Movement K.330": r".\music_database\Mozart_-_Sonata_No._10_1st_Movement_K._330.mxl",
-        #     "Satie - Gnossienne No.1": r".\music_database\Satie_-_Gnossienne_No._1.mxl"
-        # }
 
     def _setup_widgets(self):
         """Setup the UI widgets for file selection"""
