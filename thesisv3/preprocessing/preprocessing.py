@@ -338,37 +338,37 @@ def calculate_ir_symbol(interval1, interval2, threshold=5):
 def assign_ir_symbols(note_array):
     """
     Assigns IR symbols, colors, and pattern indices to each element in the note array.
-    Groups elements based on tuplet criteria and adjacent non-tuplet elements, then assigns
-    a unique pattern index to each group. For groups with three or more elements, the first
-    two intervals are used to calculate the IR symbol (via calculate_ir_symbol). Two-element
-    groups are labeled as dyads ('d'), and single elements as monads ('M').
+    Groups contiguous note/chord elements into groups of 3. If an interruption occurs
+    (a rest, or the start of a tuplet block whose length is a multiple of 3), the current
+    group is flushed even if it has fewer than 3 elements.
 
-    Additionally, in the non-tuplet branch, we look ahead: if the next contiguous tuplet group
-    has a size that is a multiple of 3, we flush the current group and process that tuplet group
-    as its own group.
+    For groups of three, the first two intervals (calculated from the pitches) are used to
+    compute the IR symbol (via calculate_ir_symbol). Two-note groups are labeled as dyads ('d'),
+    and single notes as monads ('M').
 
     Parameters:
-        note_array (list): A list of music21 note and chord elements.
+        note_array (list): A list of music21 note, chord, and rest elements.
 
     Returns:
         list: A list of tuples (element, ir_symbol, color, pattern_index) for each element.
     """
-    symbols = []  # Will hold tuples: (element, ir_symbol, color, pattern_index)
+    symbols = []
     current_group = []
     group_pitches = []
 
     # Map IR symbols to colors.
     color_map = {
-        'P': 'blue',      # IR1: P (Process)
-        'D': 'green',     # IR2: D (Duplication)
-        'IP': 'red',      # IR3: IP (Intervallic Process)
-        'ID': 'orange',   # IR4: ID (Intervallic Duplication)
-        'VP': 'purple',   # IR5: VP (Vector Process)
-        'R': 'cyan',      # IR6: R (Reversal)
-        'IR': 'magenta',  # IR7: IR (Intervallic Reversal)
-        'VR': 'yellow',   # IR8: VR (Vector Reversal)
-        'M': 'pink',      # IR9: M (Monad)
-        'd': 'lime',      # IR10: d (Dyad)
+        'P': 'blue',  # Process
+        'D': 'green',  # Duplication
+        'IP': 'red',  # Intervallic Process
+        'ID': 'orange',  # Intervallic Duplication
+        'VP': 'purple',  # Vector Process
+        'R': 'cyan',  # Reversal
+        'IR': 'magenta',  # Intervallic Reversal
+        'VR': 'yellow',  # Vector Reversal
+        'M': 'pink',  # Monad
+        'd': 'lime',  # Dyad
+        'rest': 'black'
     }
 
     pattern_index = 0
@@ -378,122 +378,111 @@ def assign_ir_symbols(note_array):
         if not current_group:
             return
         if len(current_group) >= 3:
-            # Use the first two intervals to determine the IR symbol.
+            # For groups of three, use the first two intervals.
             interval1 = group_pitches[1] - group_pitches[0]
             interval2 = group_pitches[2] - group_pitches[1]
             symbol = calculate_ir_symbol(interval1, interval2)
-            color = color_map.get(symbol, 'black')
-            symbols.extend([(elem, symbol, color, pattern_index) for elem in current_group])
+            col = color_map.get(symbol, 'black')
+            for elem in current_group:
+                symbols.append((elem, symbol, col, pattern_index))
         elif len(current_group) == 2:
-            symbols.extend([(elem, 'd', color_map['d'], pattern_index) for elem in current_group])
+            for elem in current_group:
+                symbols.append((elem, 'd', color_map['d'], pattern_index))
         elif len(current_group) == 1:
-            symbols.extend([(elem, 'M', color_map['M'], pattern_index) for elem in current_group])
+            for elem in current_group:
+                symbols.append((elem, 'M', color_map['M'], pattern_index))
         pattern_index += 1
         current_group.clear()
         group_pitches.clear()
 
+    def flush_current_group():
+        if current_group:
+            evaluate_current_group()
+
     def get_tuplet_status(e):
         """
-        Determines if a note or chord is part of a tuplet whose actual note count is a multiple of 3.
-        Returns:
-            'tuplet' if yes, or 'single' if not.
+        Returns "tuplet" if the element is part of a tuplet whose actual note count is a multiple of 3,
+        otherwise returns "single".
         """
         if hasattr(e, 'duration') and e.duration.tuplets:
-            # For simplicity, check the first tuplet object.
             tup = e.duration.tuplets[0]
             if tup.numberNotesActual % 3 == 0:
                 return "tuplet"
         return "single"
 
-    num_notes = len(note_array)
     i = 0
+    num_notes = len(note_array)
     while i < num_notes:
-        element = note_array[i]
-        if isinstance(element, (note.Note, chord.Chord)):
-            tuplet_status = get_tuplet_status(element)
-            if tuplet_status == "tuplet":
-                # Process contiguous tuplet elements.
-                current_group.append(element)
-                if isinstance(element, note.Note):
-                    group_pitches.append(element.pitch.ps)
-                elif isinstance(element, chord.Chord):
-                    group_pitches.append(element.root().ps)
-                i += 1
-                while i < num_notes:
-                    next_element = note_array[i]
-                    if not isinstance(next_element, (note.Note, chord.Chord)):
-                        break
-                    if get_tuplet_status(next_element) == "tuplet":
-                        current_group.append(next_element)
-                        if isinstance(next_element, note.Note):
-                            group_pitches.append(next_element.pitch.ps)
-                        elif isinstance(next_element, chord.Chord):
-                            group_pitches.append(next_element.root().ps)
-                        i += 1
-                    else:
-                        break
-                # Process the collected tuplet group as its own group.
-                evaluate_current_group()
-                continue  # Already advanced i.
-            else:
-                # For non-tuplet elements, add them to the current group.
-                current_group.append(element)
-                if isinstance(element, note.Note):
-                    group_pitches.append(element.pitch.ps)
-                elif isinstance(element, chord.Chord):
-                    group_pitches.append(element.root().ps)
-                # Look ahead: if the next element starts a tuplet group,
-                # check if that contiguous tuplet group has a size that is a multiple of 3.
-                if i < num_notes - 1:
-                    next_element = note_array[i+1]
-                    if get_tuplet_status(next_element) == "tuplet":
-                        temp_index = i + 1
-                        temp_group = []
-                        while temp_index < num_notes and get_tuplet_status(note_array[temp_index]) == "tuplet":
-                            temp_group.append(note_array[temp_index])
-                            temp_index += 1
-                        if len(temp_group) > 0 and (len(temp_group) % 3 == 0):
-                            # Flush current group first.
-                            evaluate_current_group()
-                            # Process the tuplet group as its own group.
-                            for elem in temp_group:
-                                current_group.append(elem)
-                                if isinstance(elem, note.Note):
-                                    group_pitches.append(elem.pitch.ps)
-                                elif isinstance(elem, chord.Chord):
-                                    group_pitches.append(elem.root().ps)
-                            i = temp_index
-                            evaluate_current_group()
-                            continue
-                        else:
-                            # Otherwise, merge the tuplet elements into the current group normally.
-                            for elem in temp_group:
-                                current_group.append(elem)
-                                if isinstance(elem, note.Note):
-                                    group_pitches.append(elem.pitch.ps)
-                                elif isinstance(elem, chord.Chord):
-                                    group_pitches.append(elem.root().ps)
-                            i = temp_index
-                            evaluate_current_group()
-                            continue
-                if len(current_group) >= 3:
-                    evaluate_current_group()
-                i += 1
-        elif isinstance(element, note.Rest):
-            if current_group:
-                evaluate_current_group()
-            symbols.append((element, 'rest', 'black', pattern_index))
+        elem = note_array[i]
+        if isinstance(elem, note.Rest):
+            # A rest interrupts the group.
+            flush_current_group()
+            symbols.append((elem, 'rest', color_map['rest'], pattern_index))
             pattern_index += 1
             i += 1
+        elif isinstance(elem, (note.Note, chord.Chord)):
+            # Check if this element is part of a tuplet block.
+            if get_tuplet_status(elem) == "tuplet":
+                # Collect the contiguous tuplet block.
+                tuplet_group = []
+                tuplet_group_pitches = []
+                while (i < num_notes and
+                       isinstance(note_array[i], (note.Note, chord.Chord)) and
+                       get_tuplet_status(note_array[i]) == "tuplet"):
+                    t_elem = note_array[i]
+                    tuplet_group.append(t_elem)
+                    if isinstance(t_elem, note.Note):
+                        tuplet_group_pitches.append(t_elem.pitch.ps)
+                    elif isinstance(t_elem, chord.Chord):
+                        tuplet_group_pitches.append(t_elem.root().ps)
+                    i += 1
+                # If the block’s length is a multiple of 3, treat it as an interruption:
+                if len(tuplet_group) % 3 == 0:
+                    flush_current_group()
+                    # Process the tuplet block in chunks of 3.
+                    for j in range(0, len(tuplet_group), 3):
+                        chunk = tuplet_group[j:j + 3]
+                        chunk_pitches = tuplet_group_pitches[j:j + 3]
+                        if len(chunk) == 3:
+                            interval1 = chunk_pitches[1] - chunk_pitches[0]
+                            interval2 = chunk_pitches[2] - chunk_pitches[1]
+                            sym = calculate_ir_symbol(interval1, interval2)
+                            col = color_map.get(sym, 'black')
+                            for item in chunk:
+                                symbols.append((item, sym, col, pattern_index))
+                        elif len(chunk) == 2:
+                            for item in chunk:
+                                symbols.append((item, 'd', color_map['d'], pattern_index))
+                        else:
+                            for item in chunk:
+                                symbols.append((item, 'M', color_map['M'], pattern_index))
+                        pattern_index += 1
+                else:
+                    # If the tuplet block is NOT a multiple of 3, add its notes to the current group.
+                    for t_elem in tuplet_group:
+                        current_group.append(t_elem)
+                        if isinstance(t_elem, note.Note):
+                            group_pitches.append(t_elem.pitch.ps)
+                        elif isinstance(t_elem, chord.Chord):
+                            group_pitches.append(t_elem.root().ps)
+                        if len(current_group) == 3:
+                            evaluate_current_group()
+            else:
+                # A non-tuplet note/chord: add to current group.
+                current_group.append(elem)
+                if isinstance(elem, note.Note):
+                    group_pitches.append(elem.pitch.ps)
+                elif isinstance(elem, chord.Chord):
+                    group_pitches.append(elem.root().ps)
+                if len(current_group) == 3:
+                    evaluate_current_group()
+                i += 1
         else:
-            if current_group:
-                evaluate_current_group()
+            flush_current_group()
             i += 1
-
-    if current_group:
-        evaluate_current_group()
-
+    flush_current_group()
     return symbols
+
 
 # This version incorrectly treats beamed notes as one group.
 def assign_ir_symbols_too_complicated(note_array):
@@ -539,6 +528,7 @@ def assign_ir_symbols_too_complicated(note_array):
         if not current_group:
             return
         if len(current_group) >= 3:
+            print(current_group)
             # Use the first two intervals to determine the IR symbol.
             interval1 = group_pitches[1] - group_pitches[0]
             interval2 = group_pitches[2] - group_pitches[1]
