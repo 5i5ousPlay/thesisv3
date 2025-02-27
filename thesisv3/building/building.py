@@ -10,7 +10,7 @@ from thesisv3.utils.helpers import *
 # Distance Matrix Operations
 # ===============================
 
-def segments_to_distance_matrix(segments: list[pd.DataFrame], cores=None):
+def segments_to_distance_matrix(segments: list[pd.DataFrame], cores=None, debug=False):
     """
     Converts segments to a distance matrix using multiprocessing.
 
@@ -49,8 +49,9 @@ def segments_to_distance_matrix(segments: list[pd.DataFrame], cores=None):
             distance_matrix[j, i] = distance  # Reflect along the diagonal
             log_message(message)
 
-        for message in message_list:
-            print(message)
+        if debug:
+            for message in message_list:
+                print(message)
 
     return distance_matrix
 
