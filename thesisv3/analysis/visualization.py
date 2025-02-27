@@ -728,3 +728,46 @@ def visualize_notes_with_symbols(notes_with_symbols, original_score, all_parts=F
                     print(element)
 
     return new_score
+
+
+
+# This version flattens
+def visualize_notes_with_symbols_flatten(notes_with_symbols, original_score, all_parts=False):
+    """
+    Visualizes notes with their assigned IR symbols and colors in a music21 score.
+
+    Parameters:
+        notes_with_symbols (list): A list of tuples containing (element, symbol, color, pattern_index).
+        original_score (music21.stream.Score): The original score used as a template.
+        all_parts (bool): If True, process all parts; if False, process only the first part.
+
+    Returns:
+        music21.stream.Score: A new score with annotated symbols and colors.
+    """
+    # Make a deep copy of the original score to preserve its structure.
+    new_score = copy.deepcopy(original_score)
+
+    # Determine the parts to process.
+    parts_to_process = new_score.parts if hasattr(new_score, 'parts') else [new_score]
+    if not all_parts and hasattr(new_score, 'parts'):
+        parts_to_process = [new_score.parts[0]]
+
+    # Create an iterator over the provided symbols list.
+    symbols_iter = iter(notes_with_symbols)
+
+    # Process each part's flattened stream.
+    for part in parts_to_process:
+        flat_part = part.flatten()
+        for element in flat_part.getElementsByClass([note.Note, note.Rest, chord.Chord]):
+            try:
+                symbol_element, symbol, color, _ = next(symbols_iter)
+                # If the elements match, annotate the element.
+                if element == symbol_element:
+                    element.style.color = color
+                    element.lyric = symbol
+                else:
+                    print(f"Expected: {symbol_element}, Found: {element}")
+            except StopIteration:
+                break  # No more symbols to assign.
+
+    return new_score

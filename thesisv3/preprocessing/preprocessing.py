@@ -102,26 +102,28 @@ def recreate_score(elements_df):
     return score
 
 
-def parse_score_elements_old(score: stream.Score, all_parts: bool = False) -> tuple[pd.DataFrame, list, list]:
+# this version flattens
+def parse_score_elements_flatten(score: stream.Score, all_parts: bool = False) -> tuple[pd.DataFrame, list, list]:
     """
     Parses a music21 score object into a DataFrame of note attributes and lists of note and chord elements.
     By default, only processes the first part unless all_parts=True.
 
     Parameters:
-    score (music21.stream.Score): The music21 score object to parse.
-    all_parts (bool): If True, process all parts. If False, only process the first part. Defaults to False.
+        score (music21.stream.Score): The music21 score object to parse.
+        all_parts (bool): If True, process all parts. If False, only process the first part. Defaults to False.
 
     Returns:
-    tuple: A tuple containing:
-        - pd.DataFrame: A DataFrame with onset (global and relative to measure), duration, MIDI pitch, pitch class, octave, and beat strength for each note.
-        - list: A list of note and chord elements.
-        - list: A list of all elements processed.
+        tuple: A tuple containing:
+            - pd.DataFrame: A DataFrame with onset (global and relative to measure), duration, MIDI pitch,
+                            pitch class, octave, and beat strength for each note.
+            - list: A list of note and chord elements.
+            - list: A list of all elements processed.
     """
     trashed_elements = 0
-    narr = []
-    sarr = []
+    narr = []  # Successfully processed note/chord/rest elements
+    sarr = []  # All elements encountered
     nmat = pd.DataFrame(columns=[
-        'onset_beats',  # Onset in beats for the whole piece
+        'onset_beats',  # Global onset in beats for the whole piece
         'onset_beats_in_measure',  # Onset relative to the measure
         'duration_beats',
         'midi_pitch',
@@ -130,75 +132,56 @@ def parse_score_elements_old(score: stream.Score, all_parts: bool = False) -> tu
         'beat_strength'
     ])
 
-    onset_beat = 0
+    # If the score has parts, process them; otherwise, treat the score as a single part.
     parts_to_process = score.parts if hasattr(score, 'parts') else [score]
     if not all_parts and hasattr(score, 'parts'):
         parts_to_process = [score.parts[0]]
 
+    # Helper function to process a single element
+    def process_element(e):
+        duration = e.duration.quarterLength
+        beat_strength = getattr(e, 'beatStrength', None)
+        # Global onset using music21's built-in function
+        global_onset = e.getOffsetInHierarchy(score)
+        # For onset relative to the measure, attempt to get the measure context:
+        measure_context = e.getContextByClass('Measure')
+        if measure_context is not None:
+            onset_in_measure = e.offset - measure_context.offset
+        else:
+            onset_in_measure = e.offset
+
+        if isinstance(e, chord.Chord):
+            root = e.root()
+            midi_pitch = root.midi
+            pitch_class = root.pitchClass
+            octave = root.octave
+        elif isinstance(e, note.Note):
+            midi_pitch = e.pitch.midi
+            pitch_class = e.pitch.pitchClass
+            octave = e.pitch.octave
+        elif isinstance(e, note.Rest):
+            midi_pitch = 0
+            pitch_class = 0
+            octave = 0
+        else:
+            return None, 0
+        row = [global_onset, onset_in_measure, duration, midi_pitch, pitch_class, octave, beat_strength]
+        return row, duration
+
+    # Process each part's flattened stream.
     for part in parts_to_process:
-        for measure in part.getElementsByClass(stream.Measure):
-            measure_offset_in_score = measure.getOffsetInHierarchy(score)
-            for element in measure:
-                sarr.append(element)
-                # Onset relative to the measure
-                onset_beat_in_measure = element.offset
-                # Onset relative to the whole piece
-                duration_beats = element.duration.quarterLength
-
-                # Beat strength calculation
-                beat_strength = element.beatStrength if hasattr(element, 'beatStrength') else None
-
-                if isinstance(element, chord.Chord):
-                    # Use the root note of the chord
-                    root_note = element.root()
-                    pitch_class = root_note.pitchClass
-                    octave = root_note.octave
-                    midi_pitch = root_note.midi
-                    row = [
-                        onset_beat,
-                        onset_beat_in_measure,
-                        duration_beats,
-                        midi_pitch,
-                        pitch_class,
-                        octave,
-                        beat_strength
-                    ]
-                    nmat.loc[len(nmat)] = row
-                    narr.append(element)
-                elif isinstance(element, note.Rest):
-                    # Represent rest with None for pitch attributes
-                    row = [
-                        onset_beat,
-                        onset_beat_in_measure,
-                        duration_beats,
-                        0,
-                        0,
-                        0,
-                        beat_strength
-                    ]
-                    nmat.loc[len(nmat)] = row
-                    narr.append(element)
-                elif isinstance(element, note.Note):
-                    pitch_class = element.pitch.pitchClass
-                    octave = element.pitch.octave
-                    midi_pitch = element.pitch.midi
-                    row = [
-                        onset_beat,
-                        onset_beat_in_measure,
-                        duration_beats,
-                        midi_pitch,
-                        pitch_class,
-                        octave,
-                        beat_strength
-                    ]
-                    nmat.loc[len(nmat)] = row
-                    narr.append(element)
-                else:
-                    trashed_elements += 1
-                onset_beat += duration_beats
+        # Flatten the part so that all elements are accessible in a single stream.
+        flat_part = part.flatten()
+        for element in flat_part.getElementsByClass([note.Note, chord.Chord, note.Rest]):
+            sarr.append(element)
+            row, _ = process_element(element)
+            if row is not None:
+                nmat.loc[len(nmat)] = row
+                narr.append(element)
+            else:
+                trashed_elements += 1
 
     return nmat, narr, sarr
-
 
 
 # Ideally use this version to have more correct onsets, but it's currently giving unreadable durations so idk yet
@@ -208,15 +191,15 @@ def parse_score_elements(score: stream.Score, all_parts: bool = False) -> tuple[
     By default, only processes the first part unless all_parts=True.
 
     Parameters:
-    score (music21.stream.Score): The music21 score object to parse.
-    all_parts (bool): If True, process all parts. If False, only process the first part. Defaults to False.
+        score (music21.stream.Score): The music21 score object to parse.
+        all_parts (bool): If True, process all parts. If False, only process the first part. Defaults to False.
 
     Returns:
-    tuple: A tuple containing:
-        - pd.DataFrame: A DataFrame with onset (global and relative to measure), duration, MIDI pitch,
-                        pitch class, octave, and beat strength for each note.
-        - list: A list of note and chord elements.
-        - list: A list of all elements processed.
+        tuple: A tuple containing:
+            - pd.DataFrame: A DataFrame with onset (global and relative to measure), duration, MIDI pitch,
+                            pitch class, octave, and beat strength for each note.
+            - list: A list of note and chord elements.
+            - list: A list of all elements processed.
     """
     trashed_elements = 0
     narr = []  # List for successfully processed note/chord/rest elements
@@ -230,7 +213,6 @@ def parse_score_elements(score: stream.Score, all_parts: bool = False) -> tuple[
         'octave',
         'beat_strength'
     ])
-    # parts_to_process = score.parts if all_parts else [score.parts[0]]
     parts_to_process = score.parts if hasattr(score, 'parts') else [score]
     if not all_parts and hasattr(score, 'parts'):
         parts_to_process = [score.parts[0]]
@@ -238,10 +220,30 @@ def parse_score_elements(score: stream.Score, all_parts: bool = False) -> tuple[
     # Helper function to process a single musical element (note, chord, or rest)
     def process_element(e):
         duration = e.duration.quarterLength
+        # Try to get beatStrength if it exists.
         beat_strength = getattr(e, 'beatStrength', None)
-        # Global onset using music21's built-in function
+        # If beatStrength is not set, calculate it manually.
+        if beat_strength is None:
+            # Get the measure context
+            measure_context = e.getContextByClass('Measure')
+            if measure_context is not None and measure_context.timeSignature is not None:
+                ts = measure_context.timeSignature
+                beat_dur = ts.beatDuration.quarterLength
+                # Compute the element's offset relative to the measure.
+                measure_relative_offset = e.offset - measure_context.offset
+                # Calculate position in beats.
+                beat_position = measure_relative_offset / beat_dur
+                # Simple heuristic: if beat_position is near an integer, treat it as a strong beat.
+                if abs(beat_position - round(beat_position)) < 0.1:
+                    beat_strength = 1.0
+                else:
+                    beat_strength = 0.5
+            else:
+                beat_strength = 0.5  # Default if no measure or time signature is available
+
+        # Global onset using music21's built-in function.
         global_onset = e.getOffsetInHierarchy(score)
-        # Onset relative to the measure
+        # Onset relative to the measure (if no measure context, just use e.offset).
         onset_in_measure = e.offset
         if isinstance(e, chord.Chord):
             root = e.root()
@@ -268,10 +270,6 @@ def parse_score_elements(score: stream.Score, all_parts: bool = False) -> tuple[
             for element in measure:
                 sarr.append(element)
                 if isinstance(element, stream.Voice):
-                    # Process only the first voice (or voice with id "1")
-                    # Uncomment and modify if you want to filter based on voice id.
-                    # if (element.id is not None and element.id != '1') or voice_processed:
-                    #     continue
                     voice_processed = True
                     # Process all valid subelements in the voice
                     for subelement in element.flatten().getElementsByClass([note.Note, chord.Chord, note.Rest]):
@@ -1096,7 +1094,7 @@ def preprocess_segments(segments: list[pd.DataFrame]) -> list[pd.DataFrame]:
     return preprocessed_segments
 
 
-def segments_to_distance_matrix(segments: list[pd.DataFrame], cores=None):
+def segments_to_distance_matrix(segments: list[pd.DataFrame], cores=None, debug=False):
     """
     Converts segments to a distance matrix using multiprocessing.
 
@@ -1135,8 +1133,9 @@ def segments_to_distance_matrix(segments: list[pd.DataFrame], cores=None):
             distance_matrix[j, i] = distance  # Reflect along the diagonal
             log_message(message)
 
-        for message in message_list:
-            print(message)
+        if debug:
+            for message in message_list:
+                print(message)
 
     return distance_matrix
 
