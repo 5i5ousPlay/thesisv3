@@ -830,7 +830,9 @@ def preprocess_segments(segments: list[pd.DataFrame]) -> list[pd.DataFrame]:
         # 'octave',
         # 'beat_strength'
         segment = segment[
-            ['onset_beats_in_measure', 'duration_beats', 'pitch_class', 'octave', 'beat_strength', 'expectancy'] + state_columns]
+            ['onset_beats_in_measure', 'duration_beats', 'pitch_class', 'octave', 'beat_strength',
+             # 'expectancy'
+             ] + state_columns]
 
         preprocessed_segments.append(segment)
 
