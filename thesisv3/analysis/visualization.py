@@ -1,6 +1,7 @@
 import copy
 import os
 import tempfile
+from fractions import Fraction
 
 import ipywidgets as widgets
 import pandas as pd
@@ -17,6 +18,169 @@ from pygame import mixer
 
 
 def visualize_segment(segments, segment_index, original_score, show_score=True):
+    """
+    Visualizes a specific segment from a musical score using an additive approach,
+    building a new score with only the desired elements.
+    """
+    def approximate_to_fraction(df, column='onset_beats', max_denominator=16):
+        df[column] = df[column].apply(
+            lambda x: float(Fraction(x).limit_denominator(max_denominator))
+        )
+        return df
+
+    # Define the color map for IR symbols
+    color_map = {
+        'P': 'blue',  # IR1: P (Process)
+        'D': 'green',  # IR2: D (Duplication)
+        'IP': 'red',  # IR3: IP (Intervallic Process)
+        'ID': 'orange',  # IR4: ID (Intervallic Duplication)
+        'VP': 'purple',  # IR5: VP (Vector Process)
+        'R': 'cyan',  # IR6: R (Reversal)
+        'IR': 'magenta',  # IR7: IR (Intervallic Reversal)
+        'VR': 'yellow',  # IR8: VR (Vector Reversal)
+        'M': 'pink',  # IR9: M (Monad)
+        'd': 'lime',  # IR10 d (Dyad)
+        'rest': 'black'  # Default color for rests
+    }
+
+    if not isinstance(segments, list) or segment_index >= len(segments):
+        raise ValueError(f"Invalid segment index. Must be between 0 and {len(segments) - 1}")
+
+    # Make a deep copy of the original score to preserve its structure
+    score = copy.deepcopy(original_score)
+
+    # Create a completely new score
+    new_score = stream.Score()
+
+    # First check if we have any staff groups (like piano's grand staff)
+    part_groups = []
+    for element in score.elements:
+        if isinstance(element, layout.StaffGroup):
+            part_groups.append(copy.deepcopy(element))
+
+    # Add any staff groups to the new score first
+    for group in part_groups:
+        new_score.append(group)
+
+    # Copy parts while preserving their relationships
+    for part in score.parts:
+        new_part = stream.Part()
+
+        # Preserve staff layout information
+        for elem in part.getElementsByClass('LayoutClass'):
+            new_part.append(copy.deepcopy(elem))
+
+        # Copy measures and their contents
+        for measure in part.getElementsByClass('Measure'):
+            new_measure = stream.Measure()
+            new_measure.number = measure.number
+
+            # Copy time signature if it exists
+            ts = measure.timeSignature
+            if ts:
+                new_measure.timeSignature = copy.deepcopy(ts)
+            # Copy clef if it exists
+            cl = measure.clef
+            if cl:
+                new_measure.clef = copy.deepcopy(cl)
+            # Copy key signature if it exists
+            ks = measure.keySignature
+            if ks:
+                new_measure.keySignature = copy.deepcopy(ks)
+
+            # Copy notes, rests, and chords
+            for elem in measure.getElementsByClass(['Note', 'Rest', 'Chord']):
+                new_measure.append(copy.deepcopy(elem))
+
+            new_part.append(new_measure)
+
+        # Preserve any staff identifiers or group memberships
+        if hasattr(part, 'staffName'):
+            new_part.staffName = part.staffName
+        if hasattr(part, 'groupName'):
+            new_part.groupName = part.groupName
+
+        new_score.append(new_part)
+
+    # Add segment number as a text expression at the top
+    segment_text = expressions.TextExpression(f'Segment {segment_index}')
+    segment_text.style.absoluteY = 75  # Position above the staff
+    segment_text.style.fontSize = 14
+    first_measure = new_score.parts[0].getElementsByClass('Measure')[0]
+    first_measure.insert(0, segment_text)
+
+    # Get the selected segment
+    segment = segments[segment_index]
+    segment = approximate_to_fraction(segment, column='onset_beats', max_denominator=16)
+
+    # Create a set of onsets in the segment for quick lookup
+    segment_onsets = set(segment['onset_beats'].values)
+
+    # Iterate over the parts of the new_score
+    for part in new_score.parts:
+        measures_to_keep = []
+        # First pass: identify measures with segment notes and transform notes
+        for measure in part.getElementsByClass(stream.Measure):
+            has_segment_notes = False
+            for element in measure:
+                if isinstance(element, (note.Note, note.Rest, chord.Chord)):
+                    element_offset = element.getOffsetInHierarchy(new_score)
+
+                    if element_offset in segment_onsets:
+                        has_segment_notes = True
+                        # Find the corresponding row in our segment DataFrame
+                        segment_row = segment[segment['onset_beats'] == element_offset].iloc[0]
+
+                        # If it's a rest in our segment data
+                        if segment_row['midi_pitch'] == 0:
+                            new_element = note.Rest(quarterLength=element.duration.quarterLength)
+                            new_element.style.color = color_map['rest']
+                        else:
+                            # Create a new note with the pitch from our segment
+                            new_element = note.Note(
+                                pitch=segment_row['midi_pitch'],
+                                quarterLength=element.duration.quarterLength
+                            )
+
+                            # Add IR symbol and color if available
+                            if 'ir_symbol' in segment_row:
+                                ir_symbol = segment_row['ir_symbol']
+                                new_element.lyric = ir_symbol
+                                if ir_symbol in color_map:
+                                    new_element.style.color = color_map[ir_symbol]
+
+                        # Replace the element in the measure
+                        measure.replace(element, new_element)
+                    else:
+                        # Remove notes not in our segment
+                        measure.remove(element)
+
+            if has_segment_notes:
+                measures_to_keep.append(measure)
+
+        # Clear all measures from the part
+        for measure in part.getElementsByClass(stream.Measure):
+            part.remove(measure)
+
+        # Add back only the measures we want to keep
+        for measure in measures_to_keep:
+            part.append(measure)
+
+        # If the part is empty after removing measures, remove it from the score
+        if len(part.getElementsByClass(stream.Measure)) == 0:
+            new_score.remove(part)
+
+    # --- FIX: Ensure the score is well-formed before showing/exporting ---
+    new_score.makeNotation(inPlace=True)
+
+    # Show the updated score if requested
+    if show_score:
+        new_score.show()
+
+    return new_score
+
+
+def visualize_segment_deprecated(segments, segment_index, original_score, show_score=True):
     """
     Visualizes a specific segment from a musical score using an additive approach,
     building a new score with only the desired elements.
@@ -110,146 +274,6 @@ def visualize_segment(segments, segment_index, original_score, show_score=True):
             new_part.groupName = part.groupName
 
         new_score.append(new_part)
-
-    # Add segment number as a text expression at the top
-    segment_text = expressions.TextExpression(f'Segment {segment_index}')
-    segment_text.style.absoluteY = 75  # Position above the staff
-    segment_text.style.fontSize = 14
-    first_measure = new_score.parts[0].getElementsByClass('Measure')[0]
-    first_measure.insert(0, segment_text)
-
-    # Get the selected segment
-    segment = segments[segment_index]
-
-    # Create a set of onsets in the segment for quick lookup
-    segment_onsets = set(segment['onset_beats'].values)
-
-    # Iterate over the parts of the new_score
-    for part in new_score.parts:
-        measures_to_keep = []
-        # First pass: identify measures with segment notes and transform notes
-        for measure in part.getElementsByClass(stream.Measure):
-            has_segment_notes = False
-            for element in measure:
-                if isinstance(element, (note.Note, note.Rest, chord.Chord)):
-                    element_offset = element.getOffsetInHierarchy(new_score)
-
-                    if element_offset in segment_onsets:
-                        has_segment_notes = True
-                        # Find the corresponding row in our segment DataFrame
-                        segment_row = segment[segment['onset_beats'] == element_offset].iloc[0]
-
-                        # If it's a rest in our segment data
-                        if segment_row['midi_pitch'] == 0:
-                            new_element = note.Rest(quarterLength=element.duration.quarterLength)
-                            new_element.style.color = color_map['rest']
-                        else:
-                            # Create a new note with the pitch from our segment
-                            new_element = note.Note(
-                                pitch=segment_row['midi_pitch'],
-                                quarterLength=element.duration.quarterLength
-                            )
-
-                            # Add IR symbol and color if available
-                            if 'ir_symbol' in segment_row:
-                                ir_symbol = segment_row['ir_symbol']
-                                new_element.lyric = ir_symbol
-                                if ir_symbol in color_map:
-                                    new_element.style.color = color_map[ir_symbol]
-
-                        # Replace the element in the measure
-                        measure.replace(element, new_element)
-                    else:
-                        # Remove notes not in our segment
-                        measure.remove(element)
-
-            if has_segment_notes:
-                measures_to_keep.append(measure)
-
-        # Clear all measures from the part
-        for measure in part.getElementsByClass(stream.Measure):
-            part.remove(measure)
-
-        # Add back only the measures we want to keep
-        for measure in measures_to_keep:
-            part.append(measure)
-
-        # If the part is empty after removing measures, remove it from the score
-        if len(part.getElementsByClass(stream.Measure)) == 0:
-            new_score.remove(part)
-
-    # Show the updated score if requested
-    if show_score:
-        new_score.show()
-
-    return new_score
-
-
-def visualize_segment_deprecated(segments, segment_index, original_score, show_score=True):
-    """
-    Legacy version of visualize_segment that uses a subtractive approach,
-    removing unwanted elements from a copied score.
-
-    Parameters:
-        segments (list[pd.DataFrame]): List of DataFrames containing segment information.
-            Each DataFrame should have columns:
-            - onset_beats: The timing of each note
-            - midi_pitch: The MIDI pitch number (0 for rests)
-            - ir_symbol: (optional) The intervallic relationship symbol
-        segment_index (int): Index of the segment to visualize
-        original_score (music21.stream.Score): The original score to maintain structure
-        show_score (bool): Whether to automatically display the score (default: True)
-
-    Returns:
-        music21.stream.Score: The modified score showing only the segment notes
-
-    Raises:
-        ValueError: If segment_index is invalid
-
-    Note:
-        This is a deprecated version kept for reference. Use visualize_segment() instead.
-    """
-    # Define the color map for IR symbols
-    color_map = {
-        'P': 'blue',  # IR1: P (Process)
-        'D': 'green',  # IR2: D (Duplication)
-        'IP': 'red',  # IR3: IP (Intervallic Process)
-        'ID': 'orange',  # IR4: ID (Intervallic Duplication)
-        'VP': 'purple',  # IR5: VP (Vector Process)
-        'R': 'cyan',  # IR6: R (Reversal)
-        'IR': 'magenta',  # IR7: IR (Intervallic Reversal)
-        'VR': 'yellow',  # IR8: VR (Vector Reversal)
-        'M': 'pink',  # IR9: M (Monad)
-        'd': 'lime',  # IR10 d (Dyad)
-        'rest': 'black'  # Default color for rests
-    }
-
-    if not isinstance(segments, list) or segment_index >= len(segments):
-        raise ValueError(f"Invalid segment index. Must be between 0 and {len(segments) - 1}")
-
-    # Make a deep copy of the original score to preserve its structure
-    new_score = copy.deepcopy(original_score)
-
-    # Remove all TextBox elements and TextExpressions from the score
-    for part in new_score.parts:
-        for measure in part.recurse().getElementsByClass('Measure'):
-            for elem in measure.getElementsByClass(['TextExpression', 'TextBox']):
-                measure.remove(elem)
-
-        # Also check for text elements directly in the part
-        for elem in part.getElementsByClass(['TextExpression', 'TextBox']):
-            part.remove(elem)
-
-    # Check for any text elements in the score itself
-    for elem in new_score.getElementsByClass(['TextExpression', 'TextBox']):
-        new_score.remove(elem)
-
-    # Remove all TextBox elements and TextExpressions from the score
-    for elem in new_score.recurse().getElementsByClass(['TextExpression', 'TextBox']):
-        elem.activeSite.remove(elem)
-
-    # Remove metadata (including filename/title)
-    new_score.metadata = None
 
     # Add segment number as a text expression at the top
     segment_text = expressions.TextExpression(f'Segment {segment_index}')
@@ -612,7 +636,7 @@ def visualize_score_with_colored_segments(original_score, segments):
         analysis = analyze_segment(segment)
 
         # Create label text
-        label_text = f"[Segment {i + 1}]\n{analysis['dominant_pattern']}"
+        label_text = f"[Segment {i + 1}]"
 
         # Create an expression for the label
         label = expressions.TextExpression(label_text)
@@ -644,5 +668,197 @@ def visualize_score_with_colored_segments(original_score, segments):
                         # Check if this element is in our segment
                         if element_offset in segment_onsets:
                             element.style.color = segment_color
+
+    return new_score
+
+
+import copy
+import math
+from music21 import stream, note, chord, expressions, tempo
+
+def visualize_score_with_colored_segments(original_score, segments):
+    """
+    Creates a visualization of the full score with color-coded segments and labels.
+    Attaches a label directly to the note (or chord) at the start of each segment.
+    Removes metronome marks and any text expressions that look like tempo markings.
+
+    Parameters:
+        original_score (music21.stream.Score): The original score.
+        segments (list): List of segment DataFrames.
+
+    Returns:
+        music21.stream.Score: Score with colored segments and annotations.
+    """
+    # Make a deep copy of the original score.
+    new_score = copy.deepcopy(original_score)
+
+    # ---------------------------
+    # 1) Remove Metronome Marks
+    # ---------------------------
+    for mm in new_score.recurse().getElementsByClass(tempo.MetronomeMark):
+        mm.activeSite.remove(mm)
+
+    # Optionally remove text expressions that contain '♩' or '='
+    for text_expr in new_score.recurse().getElementsByClass(expressions.TextExpression):
+        if '♩' in text_expr.content or '=' in text_expr.content:
+            text_expr.activeSite.remove(text_expr)
+
+    # Get colors for segments (assumes get_segment_colors() is defined elsewhere).
+    colors = get_segment_colors()
+
+    # Increase tolerance from 0.01 to a higher value (e.g. 0.1 quarter lengths).
+    tol = 0.1
+
+    # For each segment, color its notes and attach a label to the note at the segment start.
+    for i, segment in enumerate(segments):
+        # Cycle through colors if more segments than colors.
+        segment_color = colors[i % len(colors)]
+        label_text = f"[Segment {i + 1}]"
+
+        # Create a TextExpression for the label.
+        label = expressions.TextExpression(label_text)
+        label.style.fontSize = 12
+        label.style.color = segment_color
+        label.placement = 'above'
+
+        # Get the segment's start time.
+        segment_start = segment['onset_beats'].iloc[0]
+
+        # Color all notes in the segment.
+        segment_onsets = set(segment['onset_beats'].values)
+        for part in new_score.parts:
+            for measure in part.getElementsByClass(stream.Measure):
+                for element in measure:
+                    if isinstance(element, (note.Note, chord.Chord)):
+                        element_offset = element.getOffsetInHierarchy(new_score)
+                        if element_offset in segment_onsets:
+                            element.style.color = segment_color
+
+        # Attach the label directly to the note that starts the segment.
+        label_inserted = False
+        for part in new_score.parts:
+            flat_part = part.flatten().getElementsByClass([note.Note, chord.Chord])
+            for element in flat_part:
+                diff = abs(element.getOffsetInHierarchy(new_score) - segment_start)
+                if diff < tol:
+                    element.expressions.append(label)
+                    label_inserted = True
+                    break
+            if label_inserted:
+                break
+
+    return new_score
+
+
+def visualize_notes_with_symbols(notes_with_symbols, original_score, all_parts=False):
+    """
+    Visualizes notes with their assigned IR symbols and colors in a music21 score.
+    Removes metronome marks and any text expressions that look like tempo markings.
+
+    Parameters:
+        notes_with_symbols (list): A list of tuples containing (element, symbol, color, pattern_index).
+        original_score (music21.stream.Score): The original score used as template.
+        all_parts (bool): Whether to process all parts or just the first part.
+
+    Returns:
+        music21.stream.Score: A new score with annotated symbols and colors.
+    """
+    # Make a deep copy of the original score to preserve its structure
+    new_score = copy.deepcopy(original_score)
+
+    # ---------------------------
+    # 1) Remove Metronome Marks
+    # ---------------------------
+    for mm in new_score.recurse().getElementsByClass(tempo.MetronomeMark):
+        mm.activeSite.remove(mm)
+
+    # Optionally remove text expressions that contain '♩' or '='
+    for text_expr in new_score.recurse().getElementsByClass(expressions.TextExpression):
+        if '♩' in text_expr.content or '=' in text_expr.content:
+            text_expr.activeSite.remove(text_expr)
+
+    # Determine which parts to process
+    parts_to_process = new_score.parts if hasattr(new_score, 'parts') else [new_score]
+    if not all_parts and hasattr(new_score, 'parts'):
+        parts_to_process = [new_score.parts[0]]
+
+    # Create an iterator over the provided symbols list
+    symbols_iter = iter(notes_with_symbols)
+
+    for part in parts_to_process:
+        for measure in part.getElementsByClass(stream.Measure):
+            # Process each element in the measure
+            for element in measure:
+                # If the element is a Voice, process its subelements.
+                if isinstance(element, stream.Voice):
+                    for subelement in element.flatten().getElementsByClass([note.Note, note.Rest, chord.Chord]):
+                        try:
+                            symbol_element, symbol, color, _ = next(symbols_iter)
+                            if subelement == symbol_element:
+                                subelement.style.color = color
+                                subelement.lyric = symbol
+                            else:
+                                print(f"Expected: {symbol_element}, Found: {element}")
+                        except StopIteration:
+                            print(f"No more symbols to assign (stopped at {element}).")
+                            break
+                # Process standalone elements (notes, rests, chords).
+                elif isinstance(element, (note.Note, note.Rest, chord.Chord)):
+                    try:
+                        symbol_element, symbol, color, _ = next(symbols_iter)
+                        if element == symbol_element:
+                            element.style.color = color
+                            element.lyric = symbol
+                        else:
+                            print(f"Expected: {symbol_element}, Found: {element}")
+                    except StopIteration:
+                        print(f"No more symbols to assign (stopped at {element}).")
+                        break
+                else:
+                    print(element)
+
+    return new_score
+
+
+
+
+# This version flattens
+def visualize_notes_with_symbols_flatten(notes_with_symbols, original_score, all_parts=False):
+    """
+    Visualizes notes with their assigned IR symbols and colors in a music21 score.
+
+    Parameters:
+        notes_with_symbols (list): A list of tuples containing (element, symbol, color, pattern_index).
+        original_score (music21.stream.Score): The original score used as a template.
+        all_parts (bool): If True, process all parts; if False, process only the first part.
+
+    Returns:
+        music21.stream.Score: A new score with annotated symbols and colors.
+    """
+    # Make a deep copy of the original score to preserve its structure.
+    new_score = copy.deepcopy(original_score)
+
+    # Determine the parts to process.
+    parts_to_process = new_score.parts if hasattr(new_score, 'parts') else [new_score]
+    if not all_parts and hasattr(new_score, 'parts'):
+        parts_to_process = [new_score.parts[0]]
+
+    # Create an iterator over the provided symbols list.
+    symbols_iter = iter(notes_with_symbols)
+
+    # Process each part's flattened stream.
+    for part in parts_to_process:
+        flat_part = part.flatten()
+        for element in flat_part.getElementsByClass([note.Note, note.Rest, chord.Chord]):
+            try:
+                symbol_element, symbol, color, _ = next(symbols_iter)
+                # If the elements match, annotate the element.
+                if element == symbol_element:
+                    element.style.color = color
+                    element.lyric = symbol
+                else:
+                    print(f"Expected: {symbol_element}, Found: {element}")
+            except StopIteration:
+                break  # No more symbols to assign.
 
     return new_score

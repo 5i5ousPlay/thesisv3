@@ -1,3 +1,4 @@
+import math
 import re
 from multiprocessing import cpu_count, Manager, Pool
 
@@ -102,26 +103,28 @@ def recreate_score(elements_df):
     return score
 
 
-def parse_score_elements(score: stream.Score, all_parts: bool = False) -> tuple[pd.DataFrame, list, list]:
+# this version flattens
+def parse_score_elements_flatten(score: stream.Score, all_parts: bool = False) -> tuple[pd.DataFrame, list, list]:
     """
     Parses a music21 score object into a DataFrame of note attributes and lists of note and chord elements.
     By default, only processes the first part unless all_parts=True.
 
     Parameters:
-    score (music21.stream.Score): The music21 score object to parse.
-    all_parts (bool): If True, process all parts. If False, only process the first part. Defaults to False.
+        score (music21.stream.Score): The music21 score object to parse.
+        all_parts (bool): If True, process all parts. If False, only process the first part. Defaults to False.
 
     Returns:
-    tuple: A tuple containing:
-        - pd.DataFrame: A DataFrame with onset (global and relative to measure), duration, MIDI pitch, pitch class, octave, and beat strength for each note.
-        - list: A list of note and chord elements.
-        - list: A list of all elements processed.
+        tuple: A tuple containing:
+            - pd.DataFrame: A DataFrame with onset (global and relative to measure), duration, MIDI pitch,
+                            pitch class, octave, and beat strength for each note.
+            - list: A list of note and chord elements.
+            - list: A list of all elements processed.
     """
     trashed_elements = 0
-    narr = []
-    sarr = []
+    narr = []  # Successfully processed note/chord/rest elements
+    sarr = []  # All elements encountered
     nmat = pd.DataFrame(columns=[
-        'onset_beats',  # Onset in beats for the whole piece
+        'onset_beats',  # Global onset in beats for the whole piece
         'onset_beats_in_measure',  # Onset relative to the measure
         'duration_beats',
         'midi_pitch',
@@ -130,70 +133,160 @@ def parse_score_elements(score: stream.Score, all_parts: bool = False) -> tuple[
         'beat_strength'
     ])
 
-    onset_beat = 0
-    parts_to_process = score.parts if all_parts else [score.parts[0]]
+    # If the score has parts, process them; otherwise, treat the score as a single part.
+    parts_to_process = score.parts if hasattr(score, 'parts') else [score]
+    if not all_parts and hasattr(score, 'parts'):
+        parts_to_process = [score.parts[0]]
+
+    # Helper function to process a single element
+    def process_element(e):
+        duration = e.duration.quarterLength
+        beat_strength = getattr(e, 'beatStrength', None)
+        # Global onset using music21's built-in function
+        global_onset = e.getOffsetInHierarchy(score)
+        # For onset relative to the measure, attempt to get the measure context:
+        measure_context = e.getContextByClass('Measure')
+        if measure_context is not None:
+            onset_in_measure = e.offset - measure_context.offset
+        else:
+            onset_in_measure = e.offset
+
+        if isinstance(e, chord.Chord):
+            root = e.root()
+            midi_pitch = root.midi
+            pitch_class = root.pitchClass
+            octave = root.octave
+        elif isinstance(e, note.Note):
+            midi_pitch = e.pitch.midi
+            pitch_class = e.pitch.pitchClass
+            octave = e.pitch.octave
+        elif isinstance(e, note.Rest):
+            midi_pitch = 0
+            pitch_class = 0
+            octave = 0
+        else:
+            return None, 0
+        row = [global_onset, onset_in_measure, duration, midi_pitch, pitch_class, octave, beat_strength]
+        return row, duration
+
+    # Process each part's flattened stream.
+    for part in parts_to_process:
+        # Flatten the part so that all elements are accessible in a single stream.
+        flat_part = part.flatten()
+        for element in flat_part.getElementsByClass([note.Note, chord.Chord, note.Rest]):
+            sarr.append(element)
+            row, _ = process_element(element)
+            if row is not None:
+                nmat.loc[len(nmat)] = row
+                narr.append(element)
+            else:
+                trashed_elements += 1
+
+    return nmat, narr, sarr
+
+
+# Ideally use this version to have more correct onsets, but it's currently giving unreadable durations so idk yet
+def parse_score_elements(score: stream.Score, all_parts: bool = False) -> tuple[pd.DataFrame, list, list]:
+    """
+    Parses a music21 score object into a DataFrame of note attributes and lists of note and chord elements.
+    By default, only processes the first part unless all_parts=True.
+
+    Parameters:
+        score (music21.stream.Score): The music21 score object to parse.
+        all_parts (bool): If True, process all parts. If False, only process the first part. Defaults to False.
+
+    Returns:
+        tuple: A tuple containing:
+            - pd.DataFrame: A DataFrame with onset (global and relative to measure), duration, MIDI pitch,
+                            pitch class, octave, and beat strength for each note.
+            - list: A list of note and chord elements.
+            - list: A list of all elements processed.
+    """
+    trashed_elements = 0
+    narr = []  # List for successfully processed note/chord/rest elements
+    sarr = []  # List for all elements encountered
+    nmat = pd.DataFrame(columns=[
+        'onset_beats',             # Global onset in beats for the whole piece
+        'onset_beats_in_measure',  # Onset relative to the measure
+        'duration_beats',
+        'midi_pitch',
+        'pitch_class',
+        'octave',
+        'beat_strength'
+    ])
+    parts_to_process = score.parts if hasattr(score, 'parts') else [score]
+    if not all_parts and hasattr(score, 'parts'):
+        parts_to_process = [score.parts[0]]
+
+    # Helper function to process a single musical element (note, chord, or rest)
+    def process_element(e):
+        duration = e.duration.quarterLength
+        # Try to get beatStrength if it exists.
+        beat_strength = getattr(e, 'beatStrength', None)
+        if beat_strength is None or (isinstance(beat_strength, float) and math.isnan(beat_strength)):
+            # Get the measure context
+            measure_context = e.getContextByClass('Measure')
+            # print(measure_context.timeSignature)
+            if measure_context is not None and measure_context.timeSignature is not None:
+                ts = measure_context.timeSignature
+                beat_dur = ts.beatDuration.quarterLength
+                # Compute the element's offset relative to the measure.
+                measure_relative_offset = e.offset - measure_context.offset
+                # Calculate position in beats.
+                beat_position = measure_relative_offset / beat_dur
+                # Simple heuristic: if beat_position is near an integer, treat it as a strong beat.
+                if abs(beat_position - round(beat_position)) < 0.1:
+                    beat_strength = 1.0
+                else:
+                    beat_strength = 0.5
+            else:
+                beat_strength = 0.5  # Default if no measure or time signature is available
+
+        # Global onset using music21's built-in function.
+        global_onset = e.getOffsetInHierarchy(score)
+        # Onset relative to the measure (if no measure context, just use e.offset).
+        onset_in_measure = e.offset
+        if isinstance(e, chord.Chord):
+            root = e.root()
+            midi_pitch = root.midi
+            pitch_class = root.pitchClass
+            octave = root.octave
+        elif isinstance(e, note.Note):
+            midi_pitch = e.pitch.midi
+            pitch_class = e.pitch.pitchClass
+            octave = e.pitch.octave
+        elif isinstance(e, note.Rest):
+            midi_pitch = 0
+            pitch_class = 0
+            octave = 0
+        else:
+            return None, 0
+        row = [global_onset, onset_in_measure, duration, midi_pitch, pitch_class, octave, beat_strength]
+        return row, duration
 
     for part in parts_to_process:
         for measure in part.getElementsByClass(stream.Measure):
-            measure_offset_in_score = measure.getOffsetInHierarchy(score)
+            # Process only the first Voice in the measure (if any)
+            voice_processed = False
             for element in measure:
                 sarr.append(element)
-                # Onset relative to the measure
-                onset_beat_in_measure = element.offset
-                # Onset relative to the whole piece
-                duration_beats = element.duration.quarterLength
-
-                # Beat strength calculation
-                beat_strength = element.beatStrength if hasattr(element, 'beatStrength') else None
-
-                if isinstance(element, chord.Chord):
-                    # Use the root note of the chord
-                    root_note = element.root()
-                    pitch_class = root_note.pitchClass
-                    octave = root_note.octave
-                    midi_pitch = root_note.midi
-                    row = [
-                        onset_beat,
-                        onset_beat_in_measure,
-                        duration_beats,
-                        midi_pitch,
-                        pitch_class,
-                        octave,
-                        beat_strength
-                    ]
-                    nmat.loc[len(nmat)] = row
-                    narr.append(element)
-                elif isinstance(element, note.Rest):
-                    # Represent rest with None for pitch attributes
-                    row = [
-                        onset_beat,
-                        onset_beat_in_measure,
-                        duration_beats,
-                        0,
-                        0,
-                        0,
-                        beat_strength
-                    ]
-                    nmat.loc[len(nmat)] = row
-                    narr.append(element)
-                elif isinstance(element, note.Note):
-                    pitch_class = element.pitch.pitchClass
-                    octave = element.pitch.octave
-                    midi_pitch = element.pitch.midi
-                    row = [
-                        onset_beat,
-                        onset_beat_in_measure,
-                        duration_beats,
-                        midi_pitch,
-                        pitch_class,
-                        octave,
-                        beat_strength
-                    ]
-                    nmat.loc[len(nmat)] = row
-                    narr.append(element)
+                if isinstance(element, stream.Voice):
+                    voice_processed = True
+                    # Process all valid subelements in the voice
+                    for subelement in element.flatten().getElementsByClass([note.Note, chord.Chord, note.Rest]):
+                        row, _ = process_element(subelement)
+                        if row is not None:
+                            nmat.loc[len(nmat)] = row
+                            narr.append(subelement)
+                        else:
+                            trashed_elements += 1
                 else:
-                    trashed_elements += 1
-                onset_beat += duration_beats
+                    row, _ = process_element(element)
+                    if row is not None:
+                        nmat.loc[len(nmat)] = row
+                        narr.append(element)
+                    else:
+                        trashed_elements += 1
 
     return nmat, narr, sarr
 
@@ -217,8 +310,7 @@ def calculate_ir_symbol(interval1, interval2, threshold=5):
         return 'P'  # Process
     elif interval1 == interval2 == 0:
         return 'D'  # Duplication
-    elif (interval1 * interval2 < 0) and (-threshold <= abs_difference <= threshold) and (
-            abs(interval2) != abs(interval1)):
+    elif (direction < 0) and (-threshold <= abs_difference <= threshold) and (abs(interval2) != abs(interval1)):
         return 'IP'  # Intervallic Process
     elif (interval1 * interval2 < 0) and (abs(interval2) == abs(interval1)):
         return 'ID'  # Intervallic Duplication
@@ -244,52 +336,223 @@ def calculate_ir_symbol(interval1, interval2, threshold=5):
 
 def assign_ir_symbols(note_array):
     """
-    Assigns IR symbols and colors to each element in the score array.
+    Assigns IR symbols, colors, and pattern indices to each element in the note array.
+    Groups contiguous note/chord elements into groups of 3. If an interruption occurs
+    (a rest, or the start of a tuplet block whose length is a multiple of 3), the current
+    group is flushed even if it has fewer than 3 elements.
+
+    For groups of three, the first two intervals (calculated from the pitches) are used to
+    compute the IR symbol (via calculate_ir_symbol). Two-note groups are labeled as dyads ('d'),
+    and single notes as monads ('M').
 
     Parameters:
-    score_array (list): A list of music21 note and chord elements.
+        note_array (list): A list of music21 note, chord, and rest elements.
 
     Returns:
-    list: A list of tuples containing each element, its IR symbol, and its color.
+        list: A list of tuples (element, ir_symbol, color, pattern_index) for each element.
     """
     symbols = []
     current_group = []
     group_pitches = []
-    last_beam_status = None
 
+    # Map IR symbols to colors.
     color_map = {
-        'P': 'blue',  # IR1: P (Process)
-        'D': 'green',  # IR2: D (Duplication)
-        'IP': 'red',  # IR3: IP (Intervallic Process)
-        'ID': 'orange',  # IR4: ID (Intervallic Duplication)
-        'VP': 'purple',  # IR5: VP (Vector Process)
-        'R': 'cyan',  # IR6: R (Reversal)
-        'IR': 'magenta',  # IR7: IR (Intervallic Reversal)
-        'VR': 'yellow',  # IR8: VR (Vector Reversal)
-        'M': 'pink',  # IR9: M (Monad)
-        'd': 'lime',  # IR10 d (Dyad)
+        'P': 'blue',  # Process
+        'D': 'green',  # Duplication
+        'IP': 'red',  # Intervallic Process
+        'ID': 'orange',  # Intervallic Duplication
+        'VP': 'purple',  # Vector Process
+        'R': 'cyan',  # Reversal
+        'IR': 'magenta',  # Intervallic Reversal
+        'VR': 'yellow',  # Vector Reversal
+        'M': 'pink',  # Monad
+        'd': 'lime',  # Dyad
+        'rest': 'black'
     }
 
+    pattern_index = 0
+
     def evaluate_current_group():
+        nonlocal pattern_index
+        if not current_group:
+            return
         if len(current_group) >= 3:
+            # For groups of three, use the first two intervals.
             interval1 = group_pitches[1] - group_pitches[0]
             interval2 = group_pitches[2] - group_pitches[1]
             symbol = calculate_ir_symbol(interval1, interval2)
-            color = color_map.get(symbol, 'black')  # Default to black if symbol is not predefined
-            symbols.extend([(note, symbol, color) for note in current_group])
+            col = color_map.get(symbol, 'black')
+            for elem in current_group:
+                symbols.append((elem, symbol, col, pattern_index))
         elif len(current_group) == 2:
-            symbols.extend([(note, 'd', color_map['d']) for note in current_group])  # Dyad
+            for elem in current_group:
+                symbols.append((elem, 'd', color_map['d'], pattern_index))
         elif len(current_group) == 1:
-            symbols.extend([(note, 'M', color_map['M']) for note in current_group])  # Monad
+            for elem in current_group:
+                symbols.append((elem, 'M', color_map['M'], pattern_index))
+        pattern_index += 1
+        current_group.clear()
+        group_pitches.clear()
+
+    def flush_current_group():
+        if current_group:
+            evaluate_current_group()
+
+    def get_tuplet_status(e):
+        """
+        Returns "tuplet" if the element is part of a tuplet whose actual note count is a multiple of 3,
+        otherwise returns "single".
+        """
+        if hasattr(e, 'duration') and e.duration.tuplets:
+            tup = e.duration.tuplets[0]
+            if tup.numberNotesActual % 3 == 0:
+                return "tuplet"
+        return "single"
+
+    i = 0
+    num_notes = len(note_array)
+    while i < num_notes:
+        elem = note_array[i]
+        if isinstance(elem, note.Rest):
+            # A rest interrupts the group.
+            flush_current_group()
+            symbols.append((elem, 'rest', color_map['rest'], pattern_index))
+            pattern_index += 1
+            i += 1
+        elif isinstance(elem, (note.Note, chord.Chord)):
+            # Check if this element is part of a tuplet block.
+            if get_tuplet_status(elem) == "tuplet":
+                # Collect the contiguous tuplet block.
+                tuplet_group = []
+                tuplet_group_pitches = []
+                while (i < num_notes and
+                       isinstance(note_array[i], (note.Note, chord.Chord)) and
+                       get_tuplet_status(note_array[i]) == "tuplet"):
+                    t_elem = note_array[i]
+                    tuplet_group.append(t_elem)
+                    if isinstance(t_elem, note.Note):
+                        tuplet_group_pitches.append(t_elem.pitch.ps)
+                    elif isinstance(t_elem, chord.Chord):
+                        tuplet_group_pitches.append(t_elem.root().ps)
+                    i += 1
+                # If the block’s length is a multiple of 3, treat it as an interruption:
+                if len(tuplet_group) % 3 == 0:
+                    flush_current_group()
+                    # Process the tuplet block in chunks of 3.
+                    for j in range(0, len(tuplet_group), 3):
+                        chunk = tuplet_group[j:j + 3]
+                        chunk_pitches = tuplet_group_pitches[j:j + 3]
+                        if len(chunk) == 3:
+                            interval1 = chunk_pitches[1] - chunk_pitches[0]
+                            interval2 = chunk_pitches[2] - chunk_pitches[1]
+                            sym = calculate_ir_symbol(interval1, interval2)
+                            col = color_map.get(sym, 'black')
+                            for item in chunk:
+                                symbols.append((item, sym, col, pattern_index))
+                        elif len(chunk) == 2:
+                            for item in chunk:
+                                symbols.append((item, 'd', color_map['d'], pattern_index))
+                        else:
+                            for item in chunk:
+                                symbols.append((item, 'M', color_map['M'], pattern_index))
+                        pattern_index += 1
+                else:
+                    # If the tuplet block is NOT a multiple of 3, add its notes to the current group.
+                    for t_elem in tuplet_group:
+                        current_group.append(t_elem)
+                        if isinstance(t_elem, note.Note):
+                            group_pitches.append(t_elem.pitch.ps)
+                        elif isinstance(t_elem, chord.Chord):
+                            group_pitches.append(t_elem.root().ps)
+                        if len(current_group) == 3:
+                            evaluate_current_group()
+            else:
+                # A non-tuplet note/chord: add to current group.
+                current_group.append(elem)
+                if isinstance(elem, note.Note):
+                    group_pitches.append(elem.pitch.ps)
+                elif isinstance(elem, chord.Chord):
+                    group_pitches.append(elem.root().ps)
+                if len(current_group) == 3:
+                    evaluate_current_group()
+                i += 1
+        else:
+            flush_current_group()
+            i += 1
+    flush_current_group()
+    return symbols
+
+
+# This version incorrectly treats beamed notes as one group.
+def assign_ir_symbols_too_complicated(note_array):
+    """
+    Assigns IR symbols, colors, and pattern indices to each element in the note array.
+    Groups elements based on beam criteria and adjacent non-beamed elements, then assigns
+    a unique pattern index to each group. For groups with three or more elements, the first
+    two intervals are used to calculate the IR symbol (via calculate_ir_symbol). Two-element
+    groups are labeled as dyads ('d'), and single elements as monads ('M').
+
+    Parameters:
+        note_array (list): A list of music21 note and chord elements.
+
+    Returns:
+        list: A list of tuples (element, ir_symbol, color, pattern_index) for each element.
+    """
+    symbols = []  # Will hold tuples: (element, ir_symbol, color, pattern_index)
+    current_group = []
+    group_pitches = []
+
+    # Map IR symbols to colors.
+    color_map = {
+        'P': 'blue',      # IR1: P (Process)
+        'D': 'green',     # IR2: D (Duplication)
+        'IP': 'red',      # IR3: IP (Intervallic Process)
+        'ID': 'orange',   # IR4: ID (Intervallic Duplication)
+        'VP': 'purple',   # IR5: VP (Vector Process)
+        'R': 'cyan',      # IR6: R (Reversal)
+        'IR': 'magenta',  # IR7: IR (Intervallic Reversal)
+        'VR': 'yellow',   # IR8: VR (Vector Reversal)
+        'M': 'pink',      # IR9: M (Monad)
+        'd': 'lime',      # IR10: d (Dyad)
+    }
+
+    # Define which beam statuses indicate a beamed element.
+    beamed_set = ['start', 'continue', 'partial', 'stop']
+
+    # This will count groups as we evaluate them.
+    pattern_index = 0
+
+    def evaluate_current_group():
+        nonlocal pattern_index
+        if not current_group:
+            return
+        if len(current_group) >= 3:
+            print(current_group)
+            # Use the first two intervals to determine the IR symbol.
+            interval1 = group_pitches[1] - group_pitches[0]
+            interval2 = group_pitches[2] - group_pitches[1]
+            symbol = calculate_ir_symbol(interval1, interval2)
+            color = color_map.get(symbol, 'black')
+            symbols.extend([(elem, symbol, color, pattern_index) for elem in current_group])
+        elif len(current_group) == 2:
+            symbols.extend([(elem, 'd', color_map['d'], pattern_index) for elem in current_group])
+        elif len(current_group) == 1:
+            symbols.extend([(elem, 'M', color_map['M'], pattern_index) for elem in current_group])
+        pattern_index += 1
         current_group.clear()
         group_pitches.clear()
 
     def get_beam_status(e):
+        """
+        Determines the beam status of a note or chord.
+        Returns:
+            'start', 'continue', 'stop', 'partial', or 'single' if not beamed.
+        """
+        from music21 import note, chord
         if not isinstance(e, (note.Note, chord.Chord)):
             return None
-        beam_status = 'single'  # Default status for unbeamed notes
+        beam_status = 'single'  # Default for unbeamed notes.
         if e.beams:
-            # Get beam types
             beam_types = [beam.type for beam in e.beams.beamsList]
             if 'start' in beam_types:
                 beam_status = 'start'
@@ -303,107 +566,100 @@ def assign_ir_symbols(note_array):
 
     num_notes = len(note_array)
     i = 0
+    from music21 import note, chord  # Ensure these types are available.
     while i < num_notes:
         element = note_array[i]
         if isinstance(element, (note.Note, chord.Chord)):
-            # Get beam status
             beam_status = get_beam_status(element)
-            current_group.append(element)
-            if isinstance(element, note.Note):
-                group_pitches.append(element.pitch.ps)
-            elif isinstance(element, chord.Chord):
-                group_pitches.append(element.root().ps)
-
-            # BEAM
-            if (last_beam_status in ['start', 'continue', 'partial']) and (
-                    beam_status in ['continue', 'stop', 'partial']):
-                if beam_status == 'stop':
-
-                    # TODO: REVISIT IF IT IS WEIRD
-                    if len(current_group) == 2:
+            if beam_status in beamed_set:
+                # If the element is beamed, collect all contiguous beamed elements.
+                current_group.append(element)
+                if isinstance(element, note.Note):
+                    group_pitches.append(element.pitch.ps)
+                elif isinstance(element, chord.Chord):
+                    group_pitches.append(element.root().ps)
+                i += 1
+                while i < num_notes:
+                    next_element = note_array[i]
+                    if not isinstance(next_element, (note.Note, chord.Chord)):
+                        break
+                    next_beam_status = get_beam_status(next_element)
+                    if next_beam_status in beamed_set:
+                        current_group.append(next_element)
+                        if isinstance(next_element, note.Note):
+                            group_pitches.append(next_element.pitch.ps)
+                        elif isinstance(next_element, chord.Chord):
+                            group_pitches.append(next_element.root().ps)
                         i += 1
-                        element2 = note_array[i]
-                        if isinstance(element2, (note.Note, chord.Chord)):
-                            # Get beam status
-                            beam_status = get_beam_status(element2)
-                            current_group.append(element2)
-                            if isinstance(element2, note.Note):
-                                group_pitches.append(element2.pitch.ps)
-                            elif isinstance(element2, chord.Chord):
-                                group_pitches.append(element2.root().ps)
-                        elif isinstance(element, note.Rest):
-                            rest_tuple = (element, 'rest', 'black')
+                        if next_beam_status == 'stop':
+                            break
+                    else:
+                        break
+                # For beamed groups: if the group is exactly size 2 and the next element is non-beamed,
+                # merge it.
+                if len(current_group) == 2 and i < num_notes:
+                    if get_beam_status(note_array[i]) == 'single':
+                        next_element = note_array[i]
+                        current_group.append(next_element)
+                        if isinstance(next_element, note.Note):
+                            group_pitches.append(next_element.pitch.ps)
+                        elif isinstance(next_element, chord.Chord):
+                            group_pitches.append(next_element.root().ps)
+                        i += 1
+                evaluate_current_group()
+                continue  # Already advanced i.
+            else:
+                # For non-beamed elements, add them to the current group.
+                current_group.append(element)
+                if isinstance(element, note.Note):
+                    group_pitches.append(element.pitch.ps)
+                elif isinstance(element, chord.Chord):
+                    group_pitches.append(element.root().ps)
+                # Look ahead: if the next element starts a beamed group,
+                # check if that contiguous beamed group is exactly of size 2.
+                if i < num_notes - 1:
+                    next_element = note_array[i+1]
+                    if get_beam_status(next_element) in beamed_set:
+                        temp_index = i + 1
+                        temp_group = []
+                        while temp_index < num_notes and get_beam_status(note_array[temp_index]) in beamed_set:
+                            temp_group.append(note_array[temp_index])
+                            temp_index += 1
+                        if len(temp_group) == 2:
+                            # Merge the two beamed elements into the current group.
+                            for elem in temp_group:
+                                current_group.append(elem)
+                                if isinstance(elem, note.Note):
+                                    group_pitches.append(elem.pitch.ps)
+                                elif isinstance(elem, chord.Chord):
+                                    group_pitches.append(elem.root().ps)
+                            i = temp_index
                             evaluate_current_group()
-                            symbols.append(rest_tuple)
-                        else:
-                            if current_group:
-                                evaluate_current_group()
-                    last_beam_status = beam_status
-
-            elif i < num_notes - 1 and get_beam_status(note_array[i + 1]) == 'start' and beam_status == 'single':
-                evaluate_current_group()
-            if len(current_group) == 3:
-                evaluate_current_group()
-            last_beam_status = beam_status
-
+                            continue
+                        elif len(temp_group) > 2:
+                            # Do NOT merge: evaluate the current group (which holds just the non-beamed element)
+                            evaluate_current_group()
+                            i += 1  # Increment to avoid reprocessing the same element.
+                            continue
+                # If the non-beamed group grows by itself, evaluate it.
+                if len(current_group) >= 3:
+                    evaluate_current_group()
+                i += 1
         elif isinstance(element, note.Rest):
-            rest_tuple = (element, 'rest', 'black')
-            evaluate_current_group()
-            symbols.append(rest_tuple)
-            last_beam_status = None
-            # symbols.append("POOP")
+            if current_group:
+                evaluate_current_group()
+            symbols.append((element, 'rest', 'black', pattern_index))
+            pattern_index += 1
+            i += 1
         else:
             if current_group:
                 evaluate_current_group()
-            last_beam_status = None
-        i += 1
+            i += 1
 
-    # Handle any remaining notes
     if current_group:
         evaluate_current_group()
 
     return symbols
-
-
-def visualize_notes_with_symbols(notes_with_symbols, original_score):
-    """
-    Visualizes notes with their assigned IR symbols and colors in a music21 score.
-
-    Parameters:
-    notes_with_symbols (list): A list of tuples containing each element, its IR symbol, and its color.
-    original_score (music21.stream.Score): The original music21 score to replicate structural attributes.
-
-    Returns:
-    None
-    """
-    import copy
-    from music21 import note, chord, stream
-
-    # Make a deep copy of the original score to preserve its structure
-    new_score = copy.deepcopy(original_score)
-
-    # Flatten notes_with_symbols for easy indexing
-    symbols_iter = iter(notes_with_symbols)
-
-    # Iterate over the parts of the new_score
-    for part in new_score.parts:
-        # Iterate over measures in the part
-        for measure in part.getElementsByClass(stream.Measure):
-            # Iterate over elements in the measure
-            for element in measure:
-                if isinstance(element, (note.Note, note.Rest, chord.Chord)):
-                    try:
-                        symbol_element, symbol, color = next(symbols_iter)
-                        # Apply color and lyric if the elements match
-                        if element == symbol_element:
-                            element.style.color = color
-                            element.lyric = symbol
-                    except StopIteration:
-                        break  # No more symbols to assign
-
-    # Show the updated score
-    new_score.show()
-
 
 def ir_symbols_to_matrix(note_array, note_matrix):
     """
@@ -416,8 +672,9 @@ def ir_symbols_to_matrix(note_array, note_matrix):
     Returns:
     pd.DataFrame: The updated DataFrame with assigned IR symbols.
     """
-    for pointer, (note_data, ir_symbol, color) in enumerate(note_array):
+    for pointer, (note_data, ir_symbol, color, index) in enumerate(note_array):
         note_matrix.at[pointer, 'ir_symbol'] = ir_symbol
+        note_matrix.at[pointer, 'pattern_index'] = index
     return note_matrix
 
 
@@ -615,7 +872,6 @@ def segmentgestalt(notematrix):
     if notematrix.empty:
         return None
 
-    notematrix = assign_ir_pattern_indices(notematrix)
     clind, clb = calculate_clang_boundaries(notematrix)
     s = calculate_segment_boundaries(notematrix, clind)
     s = adjust_segment_boundaries(notematrix, s)
@@ -839,7 +1095,7 @@ def preprocess_segments(segments: list[pd.DataFrame]) -> list[pd.DataFrame]:
     return preprocessed_segments
 
 
-def segments_to_distance_matrix(segments: list[pd.DataFrame], cores=None):
+def segments_to_distance_matrix(segments: list[pd.DataFrame], cores=None, debug=False):
     """
     Converts segments to a distance matrix using multiprocessing.
 
@@ -878,8 +1134,9 @@ def segments_to_distance_matrix(segments: list[pd.DataFrame], cores=None):
             distance_matrix[j, i] = distance  # Reflect along the diagonal
             log_message(message)
 
-        for message in message_list:
-            print(message)
+        if debug:
+            for message in message_list:
+                print(message)
 
     return distance_matrix
 
@@ -1022,7 +1279,7 @@ def mobility(nmat: pd.DataFrame):
     return np.abs(y)
 
 
-def tessitura(nmat:pd.DataFrame):
+def tessitura(nmat: pd.DataFrame):
     """
     Melodic tessitura based on deviation from median pitch height (Hippel, 2000)
     Based on tessitura function from MidiToolKit (Toiviainen. 2016)
@@ -1040,7 +1297,7 @@ def tessitura(nmat:pd.DataFrame):
 
     for i in range(1, n):
         median_pitch = np.median(pitches[:i])
-        deviation[i-1] = np.std(pitches[:i])
+        deviation[i - 1] = np.std(pitches[:i])
         if deviation[i - 1] == 0:
             y[i - 1] = 0  # If no variation, set tessitura to 0
         else:

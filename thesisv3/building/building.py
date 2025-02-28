@@ -10,7 +10,7 @@ from thesisv3.utils.helpers import *
 # Distance Matrix Operations
 # ===============================
 
-def segments_to_distance_matrix(segments: list[pd.DataFrame], cores=None):
+def segments_to_distance_matrix(segments: list[pd.DataFrame], cores=None, debug=False):
     """
     Converts segments to a distance matrix using multiprocessing.
 
@@ -49,8 +49,9 @@ def segments_to_distance_matrix(segments: list[pd.DataFrame], cores=None):
             distance_matrix[j, i] = distance  # Reflect along the diagonal
             log_message(message)
 
-        for message in message_list:
-            print(message)
+        if debug:
+            for message in message_list:
+                print(message)
 
     return distance_matrix
 
@@ -214,6 +215,7 @@ def mass_produce_segments(filepath, pickle_dir=None, pickle_file=None):
             parsed_score = converter.parse(piece_path)
             nmat, narr, sarr = parse_score_elements(parsed_score)
             ir_symbols = assign_ir_symbols(narr)
+            #TODO: Expectancy score here
             ir_nmat = ir_symbols_to_matrix(ir_symbols, nmat)
             ir_nmat = assign_ir_pattern_indices(ir_nmat)
 
