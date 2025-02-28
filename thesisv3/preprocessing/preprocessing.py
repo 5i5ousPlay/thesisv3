@@ -1,3 +1,4 @@
+import math
 import re
 from multiprocessing import cpu_count, Manager, Pool
 
@@ -222,10 +223,10 @@ def parse_score_elements(score: stream.Score, all_parts: bool = False) -> tuple[
         duration = e.duration.quarterLength
         # Try to get beatStrength if it exists.
         beat_strength = getattr(e, 'beatStrength', None)
-        # If beatStrength is not set, calculate it manually.
-        if beat_strength is None:
+        if beat_strength is None or (isinstance(beat_strength, float) and math.isnan(beat_strength)):
             # Get the measure context
             measure_context = e.getContextByClass('Measure')
+            # print(measure_context.timeSignature)
             if measure_context is not None and measure_context.timeSignature is not None:
                 ts = measure_context.timeSignature
                 beat_dur = ts.beatDuration.quarterLength
