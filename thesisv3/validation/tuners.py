@@ -363,12 +363,12 @@ def compare_kernels(batcher_output_dir='./batcher_output', min_k=1, max_k=10, k_
         'WeisfeilerLehman': gk.WeisfeilerLehman(normalize=True),
         # 'PyramidMatch': gk.PyramidMatch(normalize=True),
         'ShortestPath': gk.ShortestPath(normalize=True),
-        # 'GraphletSampling': gk.GraphletSampling(normalize=True),
+        'GraphletSampling': gk.GraphletSampling(normalize=True),
         'RandomWalkLabeled': gk.RandomWalkLabeled(),
         'WeisfeilerLehman (non-normalized)': gk.WeisfeilerLehman(normalize=False),
         # 'PyramidMatch (non-normalized)': gk.PyramidMatch(normalize=False),
         'ShortestPath (non-normalized)': gk.ShortestPath(normalize=False),
-        # 'GraphletSampling (non-normalized)': gk.GraphletSampling(normalize=False),
+        'GraphletSampling (non-normalized)': gk.GraphletSampling(normalize=False),
     }
 
     results = {}
