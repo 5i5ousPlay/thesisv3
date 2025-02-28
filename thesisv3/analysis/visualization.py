@@ -636,7 +636,7 @@ def visualize_score_with_colored_segments(original_score, segments):
         analysis = analyze_segment(segment)
 
         # Create label text
-        label_text = f"[Segment {i + 1}]\n{analysis['dominant_pattern']}"
+        label_text = f"[Segment {i + 1}]"
 
         # Create an expression for the label
         label = expressions.TextExpression(label_text)
@@ -672,19 +672,112 @@ def visualize_score_with_colored_segments(original_score, segments):
     return new_score
 
 
+import copy
+import math
+from music21 import stream, note, chord, expressions, tempo
+
+def visualize_score_with_colored_segments(original_score, segments):
+    """
+    Creates a visualization of the full score with color-coded segments and labels.
+    Attaches a label directly to the note (or chord) at the start of each segment.
+    Removes metronome marks and any text expressions that look like tempo markings.
+
+    Parameters:
+        original_score (music21.stream.Score): The original score.
+        segments (list): List of segment DataFrames.
+
+    Returns:
+        music21.stream.Score: Score with colored segments and annotations.
+    """
+    # Make a deep copy of the original score.
+    new_score = copy.deepcopy(original_score)
+
+    # ---------------------------
+    # 1) Remove Metronome Marks
+    # ---------------------------
+    for mm in new_score.recurse().getElementsByClass(tempo.MetronomeMark):
+        mm.activeSite.remove(mm)
+
+    # Optionally remove text expressions that contain '♩' or '='
+    for text_expr in new_score.recurse().getElementsByClass(expressions.TextExpression):
+        if '♩' in text_expr.content or '=' in text_expr.content:
+            text_expr.activeSite.remove(text_expr)
+
+    # Get colors for segments (assumes get_segment_colors() is defined elsewhere).
+    colors = get_segment_colors()
+
+    # Increase tolerance from 0.01 to a higher value (e.g. 0.1 quarter lengths).
+    tol = 0.1
+
+    # For each segment, color its notes and attach a label to the note at the segment start.
+    for i, segment in enumerate(segments):
+        # Cycle through colors if more segments than colors.
+        segment_color = colors[i % len(colors)]
+        label_text = f"[Segment {i + 1}]"
+
+        # Create a TextExpression for the label.
+        label = expressions.TextExpression(label_text)
+        label.style.fontSize = 12
+        label.style.color = segment_color
+        label.placement = 'above'
+
+        # Get the segment's start time.
+        segment_start = segment['onset_beats'].iloc[0]
+
+        # Color all notes in the segment.
+        segment_onsets = set(segment['onset_beats'].values)
+        for part in new_score.parts:
+            for measure in part.getElementsByClass(stream.Measure):
+                for element in measure:
+                    if isinstance(element, (note.Note, chord.Chord)):
+                        element_offset = element.getOffsetInHierarchy(new_score)
+                        if element_offset in segment_onsets:
+                            element.style.color = segment_color
+
+        # Attach the label directly to the note that starts the segment.
+        label_inserted = False
+        for part in new_score.parts:
+            flat_part = part.flatten().getElementsByClass([note.Note, chord.Chord])
+            for element in flat_part:
+                diff = abs(element.getOffsetInHierarchy(new_score) - segment_start)
+                if diff < tol:
+                    element.expressions.append(label)
+                    label_inserted = True
+                    break
+            if label_inserted:
+                break
+
+    return new_score
+
+
 def visualize_notes_with_symbols(notes_with_symbols, original_score, all_parts=False):
     """
     Visualizes notes with their assigned IR symbols and colors in a music21 score.
+    Removes metronome marks and any text expressions that look like tempo markings.
 
     Parameters:
-        notes_with_symbols (list): A list of tuples containing (element, symbol, color).
+        notes_with_symbols (list): A list of tuples containing (element, symbol, color, pattern_index).
         original_score (music21.stream.Score): The original score used as template.
+        all_parts (bool): Whether to process all parts or just the first part.
 
     Returns:
         music21.stream.Score: A new score with annotated symbols and colors.
     """
     # Make a deep copy of the original score to preserve its structure
     new_score = copy.deepcopy(original_score)
+
+    # ---------------------------
+    # 1) Remove Metronome Marks
+    # ---------------------------
+    for mm in new_score.recurse().getElementsByClass(tempo.MetronomeMark):
+        mm.activeSite.remove(mm)
+
+    # Optionally remove text expressions that contain '♩' or '='
+    for text_expr in new_score.recurse().getElementsByClass(expressions.TextExpression):
+        if '♩' in text_expr.content or '=' in text_expr.content:
+            text_expr.activeSite.remove(text_expr)
+
+    # Determine which parts to process
     parts_to_process = new_score.parts if hasattr(new_score, 'parts') else [new_score]
     if not all_parts and hasattr(new_score, 'parts'):
         parts_to_process = [new_score.parts[0]]
@@ -698,20 +791,17 @@ def visualize_notes_with_symbols(notes_with_symbols, original_score, all_parts=F
             for element in measure:
                 # If the element is a Voice, process its subelements.
                 if isinstance(element, stream.Voice):
-                    # if (element.id is not None and element.id != '1'):
-                    #     continue
                     for subelement in element.flatten().getElementsByClass([note.Note, note.Rest, chord.Chord]):
                         try:
                             symbol_element, symbol, color, _ = next(symbols_iter)
-                            # Apply color and add lyric if the elements match.
                             if subelement == symbol_element:
                                 subelement.style.color = color
                                 subelement.lyric = symbol
                             else:
                                 print(f"Expected: {symbol_element}, Found: {element}")
                         except StopIteration:
-                            print(f"stopping {element}")
-                            break  # No more symbols to assign.
+                            print(f"No more symbols to assign (stopped at {element}).")
+                            break
                 # Process standalone elements (notes, rests, chords).
                 elif isinstance(element, (note.Note, note.Rest, chord.Chord)):
                     try:
@@ -722,12 +812,13 @@ def visualize_notes_with_symbols(notes_with_symbols, original_score, all_parts=F
                         else:
                             print(f"Expected: {symbol_element}, Found: {element}")
                     except StopIteration:
-                        print(f"stopping {element}")
+                        print(f"No more symbols to assign (stopped at {element}).")
                         break
                 else:
                     print(element)
 
     return new_score
+
 
 
 
