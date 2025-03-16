@@ -237,7 +237,7 @@ class GraphBuilder:
 
 
 class GraphBatcher:
-    def __init__(self, k=5, output_dir='./batcher_output'):
+    def __init__(self, k=5, output_dir='./Output/batcher_output'):
         self.k = k
         self.graphs = []
         self.graph_dict = {}
