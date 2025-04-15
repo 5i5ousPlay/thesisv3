@@ -206,7 +206,7 @@ def parse_score_elements(score: stream.Score, all_parts: bool = False) -> tuple[
     narr = []  # List for successfully processed note/chord/rest elements
     sarr = []  # List for all elements encountered
     nmat = pd.DataFrame(columns=[
-        'onset_beats',             # Global onset in beats for the whole piece
+        'onset_beats',  # Global onset in beats for the whole piece
         'onset_beats_in_measure',  # Onset relative to the measure
         'duration_beats',
         'midi_pitch',
@@ -504,16 +504,16 @@ def assign_ir_symbols_too_complicated(note_array):
 
     # Map IR symbols to colors.
     color_map = {
-        'P': 'blue',      # IR1: P (Process)
-        'D': 'green',     # IR2: D (Duplication)
-        'IP': 'red',      # IR3: IP (Intervallic Process)
-        'ID': 'orange',   # IR4: ID (Intervallic Duplication)
-        'VP': 'purple',   # IR5: VP (Vector Process)
-        'R': 'cyan',      # IR6: R (Reversal)
+        'P': 'blue',  # IR1: P (Process)
+        'D': 'green',  # IR2: D (Duplication)
+        'IP': 'red',  # IR3: IP (Intervallic Process)
+        'ID': 'orange',  # IR4: ID (Intervallic Duplication)
+        'VP': 'purple',  # IR5: VP (Vector Process)
+        'R': 'cyan',  # IR6: R (Reversal)
         'IR': 'magenta',  # IR7: IR (Intervallic Reversal)
-        'VR': 'yellow',   # IR8: VR (Vector Reversal)
-        'M': 'pink',      # IR9: M (Monad)
-        'd': 'lime',      # IR10: d (Dyad)
+        'VR': 'yellow',  # IR8: VR (Vector Reversal)
+        'M': 'pink',  # IR9: M (Monad)
+        'd': 'lime',  # IR10: d (Dyad)
     }
 
     # Define which beam statuses indicate a beamed element.
@@ -618,7 +618,7 @@ def assign_ir_symbols_too_complicated(note_array):
                 # Look ahead: if the next element starts a beamed group,
                 # check if that contiguous beamed group is exactly of size 2.
                 if i < num_notes - 1:
-                    next_element = note_array[i+1]
+                    next_element = note_array[i + 1]
                     if get_beam_status(next_element) in beamed_set:
                         temp_index = i + 1
                         temp_group = []
@@ -660,6 +660,7 @@ def assign_ir_symbols_too_complicated(note_array):
         evaluate_current_group()
 
     return symbols
+
 
 def ir_symbols_to_matrix(note_array, note_matrix):
     """
@@ -1110,7 +1111,7 @@ def segments_to_distance_matrix(segments: list[pd.DataFrame], cores=None, debug=
         raise ValueError(f"You don't have enough cores! Please specify a value within your system's number of "
                          f"cores. Core Count: {cpu_count()}")
 
-    seg_np = [segment.to_numpy() for segment in segments]
+    seg_np = np.array([segment.to_numpy() for segment in segments], dtype=object)
 
     num_segments = len(seg_np)
     distance_matrix = np.zeros((num_segments, num_segments))
@@ -1118,27 +1119,27 @@ def segments_to_distance_matrix(segments: list[pd.DataFrame], cores=None, debug=
     args_list = []
     for i in range(num_segments):
         for j in range(i + 1, num_segments):
-            args_list.append((i, j, segments[i], segments[j]))
+            args_list.append((i, j, seg_np[i], seg_np[j]))
 
-    with Manager() as manager:
-        message_list = manager.list()
-
-        def log_message(message):
-            message_list.append(message)
-
-        with Pool(cores) as pool:
-            results = pool.map(worker.calculate_distance, args_list)
-
-        for i, j, distance, message in results:
-            distance_matrix[i, j] = distance
-            distance_matrix[j, i] = distance  # Reflect along the diagonal
-            log_message(message)
-
+    with Pool(cores) as pool:
+        # Using imap_unordered can be faster as results come in any order
         if debug:
-            for message in message_list:
+            messages = []
+            for i, j, distance, message in pool.imap_unordered(worker.calculate_distance, args_list):
+                distance_matrix[i, j] = distance
+                distance_matrix[j, i] = distance  # Reflect along the diagonal
+                messages.append(message)
+
+            for message in messages:
                 print(message)
+        else:
+            # When not debugging, we don't need to collect messages
+            for i, j, distance, _ in pool.imap_unordered(worker.calculate_distance, args_list):
+                distance_matrix[i, j] = distance
+                distance_matrix[j, i] = distance  # Reflect along the diagonal
 
     return distance_matrix
+
 
 
 def segments_to_graph(k: int, segments: list[pd.DataFrame], labeled_segments, cores=None):
