@@ -15,6 +15,11 @@ from music21 import (
     environment
 )
 from pygame import mixer
+import numpy as np
+import matplotlib.pyplot as plt
+import matplotlib.patches as mpatches
+from matplotlib.colors import ListedColormap
+import seaborn as sns
 
 
 def visualize_segment(segments, segment_index, original_score, show_score=True):
@@ -22,6 +27,7 @@ def visualize_segment(segments, segment_index, original_score, show_score=True):
     Visualizes a specific segment from a musical score using an additive approach,
     building a new score with only the desired elements.
     """
+
     def approximate_to_fraction(df, column='onset_beats', max_denominator=16):
         df[column] = df[column].apply(
             lambda x: float(Fraction(x).limit_denominator(max_denominator))
@@ -676,6 +682,7 @@ import copy
 import math
 from music21 import stream, note, chord, expressions, tempo
 
+
 def visualize_score_with_colored_segments(original_score, segments):
     """
     Creates a visualization of the full score with color-coded segments and labels.
@@ -820,8 +827,6 @@ def visualize_notes_with_symbols(notes_with_symbols, original_score, all_parts=F
     return new_score
 
 
-
-
 # This version flattens
 def visualize_notes_with_symbols_flatten(notes_with_symbols, original_score, all_parts=False):
     """
@@ -862,3 +867,252 @@ def visualize_notes_with_symbols_flatten(notes_with_symbols, original_score, all
                 break  # No more symbols to assign.
 
     return new_score
+
+
+import numpy as np
+import matplotlib.pyplot as plt
+import matplotlib.patches as mpatches
+from matplotlib.colors import ListedColormap
+import seaborn as sns
+
+
+def get_piece_type(piece_name):
+    """
+    Extract and categorize the type of a musical piece from its name.
+
+    Parameters:
+    -----------
+    piece_name : str
+        String in format "composer | piece name"
+
+    Returns:
+    --------
+    str
+        Categorized piece type
+    """
+    parts = piece_name.split('|')
+    if len(parts) > 1:
+        piece_part = parts[1].strip()
+
+        # Special handling for Chopin's Études
+        if 'Étude' in piece_part:
+            if 'Op. 10' in piece_part:
+                return "Chopin's Études Op. 10"
+            elif 'Op. 25' in piece_part:
+                return "Chopin's Études Op. 25"
+            else:
+                return 'Études (General)'
+        elif 'Waltz' in piece_part:
+            return "Chopin's Waltzes"
+        elif 'Sonata' in piece_part:
+            return "Ysaÿe's Violin Sonatas"
+        elif 'Suite' in piece_part:
+            return "Bach's Cello Suites"
+        elif 'Ballade' in piece_part:
+            return "Chopin's Ballades"
+        else:
+            # Default to first word
+            return piece_part.split(' ')[0]
+    return 'Unknown'
+
+
+def visualize_mds(coordinates, segment_metadata, color_by='composer', figsize=(14, 12),
+                  save_path=None, show=True):
+    """
+    Create MDS visualization of music segments colored by specified attribute.
+
+    Parameters:
+    -----------
+    coordinates : numpy.ndarray
+        MDS coordinates for each segment, shape (n_segments, 2)
+    segment_metadata : list
+        List of dictionaries containing metadata for each segment
+    color_by : str, optional
+        Attribute to color points by: 'composer', 'piece_type', or 'piece'
+    figsize : tuple, optional
+        Figure size as (width, height)
+    save_path : str, optional
+        Path to save the figure. If None, the figure won't be saved.
+    show : bool, optional
+        Whether to display the plot
+
+    Returns:
+    --------
+    matplotlib.figure.Figure
+        The created figure
+    """
+    plt.figure(figsize=figsize)
+
+    # Handle coloring by composer
+    if color_by == 'composer':
+        # Get unique composers
+        unique_items = sorted(list(set(meta['composer'] for meta in segment_metadata)))
+        item_to_idx = {item: i for i, item in enumerate(unique_items)}
+
+        # Create a color palette
+        palette = sns.color_palette("husl", len(unique_items))
+        cmap = ListedColormap(palette)
+
+        # Assign colors based on composer
+        colors = [item_to_idx[meta['composer']] for meta in segment_metadata]
+
+        # Prepare legend details
+        legend_title = "Composers"
+        label_formatter = lambda item: item
+        title = "MDS Visualization of Music Segments by Composer"
+        use_special_legend = False
+
+    # Handle coloring by piece type
+    elif color_by == 'piece_type':
+        # Get unique piece types
+        unique_items = sorted(list(set(meta['piece_type'] for meta in segment_metadata)))
+        item_to_idx = {item: i for i, item in enumerate(unique_items)}
+
+        # Create a color palette
+        palette = sns.color_palette("husl", len(unique_items))
+        cmap = ListedColormap(palette)
+
+        # Assign colors based on piece type
+        colors = [item_to_idx[meta['piece_type']] for meta in segment_metadata]
+
+        # Prepare legend details
+        legend_title = "Piece Types"
+        label_formatter = lambda item: item
+        title = "MDS Visualization of Music Segments by Piece Type"
+        use_special_legend = False
+
+    # Handle coloring by piece
+    elif color_by == 'piece':
+        # Create a unique identifier for each piece
+        piece_items = [(meta['composer'], meta['piece_name']) for meta in segment_metadata]
+        unique_items = sorted(list(set(piece_items)))
+        item_to_idx = {item: i for i, item in enumerate(unique_items)}
+
+        # Create a color palette for pieces
+        if len(unique_items) <= 10:
+            palette = sns.color_palette("husl", len(unique_items))
+        else:
+            palette = sns.color_palette("tab20", min(20, len(unique_items)))
+            # If more than 20 pieces, colors will repeat
+            if len(unique_items) > 20:
+                palette = palette * (len(unique_items) // 20 + 1)
+                palette = palette[:len(unique_items)]
+
+        cmap = ListedColormap(palette)
+
+        # Assign colors based on piece
+        colors = [item_to_idx[(meta['composer'], meta['piece_name'])] for meta in segment_metadata]
+
+        # Prepare legend details
+        legend_title = "Pieces"
+        label_formatter = lambda item: f"{item[0]} - Piece {item[1]}"
+        title = "MDS Visualization of Music Segments by Piece"
+
+        # Check if special legend handling is needed
+        legend_limit = 20
+        use_special_legend = len(unique_items) > legend_limit
+
+    else:
+        raise ValueError("color_by must be one of: 'composer', 'piece_type', 'piece'")
+
+    # Create scatter plot
+    scatter = plt.scatter(
+        coordinates[:, 0],
+        coordinates[:, 1],
+        c=colors,
+        cmap=cmap,
+        s=100,
+        alpha=0.8
+    )
+
+    # Create legend
+    if use_special_legend:
+        print(f"Too many pieces ({len(unique_items)}) for a clear legend, showing composers instead")
+        # Use composers for legend instead
+        unique_composers = sorted(list(set(meta['composer'] for meta in segment_metadata)))
+        composer_to_idx = {composer: i for i, composer in enumerate(unique_composers)}
+        composer_palette = sns.color_palette("husl", len(unique_composers))
+
+        patches = [mpatches.Patch(color=composer_palette[composer_to_idx[composer]],
+                                  label=composer) for composer in unique_composers]
+        plt.legend(handles=patches, title="Composers", loc="best")
+    else:
+        patches = [mpatches.Patch(color=palette[item_to_idx[item]],
+                                  label=label_formatter(item)) for item in unique_items]
+
+        legend_kwargs = {'handles': patches, 'title': legend_title, 'loc': "best"}
+        if color_by == 'piece':
+            # Adjustments for piece legend which can be larger
+            legend_kwargs.update({'bbox_to_anchor': (1.05, 1), 'fontsize': 'small'})
+
+        plt.legend(**legend_kwargs)
+
+    # Set titles and layout
+    plt.title(title)
+    plt.xlabel("Dimension 1")
+    plt.ylabel("Dimension 2")
+    plt.tight_layout()
+
+    # Save or show the plot
+    if save_path:
+        plt.savefig(save_path)
+
+    if not show:
+        plt.close()
+    else:
+        plt.show()
+
+    return plt.gcf()
+
+
+# Optional function for creating interactive plots with Plotly
+def visualize_mds_interactive(coordinates, segment_metadata, color_by='composer', output_path=None):
+    """Create an interactive visualization with Plotly."""
+    try:
+        import plotly.express as px
+        import pandas as pd
+
+        # Create a DataFrame for Plotly
+        plot_df = pd.DataFrame({
+            'x': coordinates[:, 0],
+            'y': coordinates[:, 1],
+            'composer': [meta['composer'] for meta in segment_metadata],
+            'piece': [f"Piece {meta['piece_name']}" for meta in segment_metadata],
+            'piece_type': [meta['piece_type'] for meta in segment_metadata],
+            'segment_idx': range(len(segment_metadata))
+        })
+
+        # Determine color column and hover data based on color_by
+        if color_by == 'composer':
+            color_col = 'composer'
+            hover_data = ['piece', 'piece_type', 'segment_idx']
+            title = "Interactive MDS Visualization by Composer"
+        elif color_by == 'piece_type':
+            color_col = 'piece_type'
+            hover_data = ['composer', 'piece', 'segment_idx']
+            title = "Interactive MDS Visualization by Piece Type"
+        elif color_by == 'piece':
+            color_col = 'piece'
+            hover_data = ['composer', 'piece_type', 'segment_idx']
+            title = "Interactive MDS Visualization by Piece"
+
+        # Create interactive plot
+        fig = px.scatter(
+            plot_df, x='x', y='y',
+            color=color_col,
+            hover_data=hover_data,
+            title=title,
+            labels={'x': 'Dimension 1', 'y': 'Dimension 2'}
+        )
+
+        fig.update_traces(marker=dict(size=10))
+
+        if output_path:
+            fig.write_html(output_path)
+            print(f"Created interactive visualization as '{output_path}'")
+
+        return fig
+
+    except ImportError:
+        print("Plotly not installed. Skipping interactive visualization.")
+        return None
