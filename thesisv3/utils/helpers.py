@@ -3,6 +3,7 @@ import os
 import networkx as nx
 from grakel import Graph
 from grakel.kernels import LovaszTheta
+from thesisv3.preprocessing.preprocessing import segments_to_distance_matrix
 
 
 def save_to_pickle(data, filename):
@@ -78,3 +79,72 @@ def compare_graphs_kernel(graph_list: list, graph_kernel):
         return similarity_matrix
     similarity_matrix = kernel.fit_transform(grakel_graphs)
     return similarity_matrix
+
+
+def get_piece_type(piece_name):
+    parts = piece_name.split('|')
+    if len(parts) > 1:
+        piece_part = parts[1].strip()
+
+        # Special handling for Chopin's Études
+        if 'Étude' in piece_part:
+            if 'Op. 10' in piece_part:
+                return "Chopin's Études Op. 10"
+            elif 'Op. 25' in piece_part:
+                return "Chopin's Études Op. 25"
+            else:
+                return 'Études (General)'
+        elif 'Waltz' in piece_part:
+            return "Chopin's Waltzes"
+        elif 'Sonata' in piece_part:
+            return "Ysaÿe's Violin Sonatas"
+        elif 'Suite' in piece_part:
+            return "Bach's Cello Suites"
+        elif 'Ballade' in piece_part:
+            return "Chopin's Ballades"
+        else:
+            # Default to first word
+            return piece_part.split(' ')[0]
+    return 'Unknown'
+
+
+def concatenate_segments(segment_dict):
+    """
+    Process a dictionary of music segments and create a distance matrix with metadata.
+
+    Parameters:
+    -----------
+    segment_dict : dict
+        Dictionary where keys are composer/piece strings in format "composer | piece name"
+        and values are lists of dataframes representing segments
+
+    Returns:
+    --------
+    tuple
+        (all_segments, segment_metadata, distance_matrix)
+        - all_segments: List of all segment dataframes
+        - segment_metadata: List of dictionaries with metadata for each segment
+        - distance_matrix: NumPy array of pairwise distances between segments
+    """
+    # Create a consolidated list of all segments
+    all_segments = []
+    segment_metadata = []  # To track which composer and piece each segment belongs to
+
+    for composer_piece, df_list in segment_dict.items():
+        # Extract composer and determine piece type
+        composer = composer_piece.split('|')[0].strip() if '|' in composer_piece else composer_piece
+        piece_type = get_piece_type(composer_piece)
+
+        for piece_idx, df in enumerate(df_list):
+            all_segments.append(df)
+            segment_metadata.append({
+                'composer': composer,
+                'piece_name': composer_piece,
+                'piece_type': piece_type,
+                'piece_idx': piece_idx
+            })
+
+    # Generate distance matrix
+    distance_matrix = segments_to_distance_matrix(all_segments)
+
+    return all_segments, segment_metadata, distance_matrix
