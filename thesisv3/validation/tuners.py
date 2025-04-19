@@ -1,12 +1,11 @@
 import os
 import pickle
 import traceback
-
 import grakel
 import numpy as np
 import networkx as nx
+
 import pandas as pd
-from sklearn.neighbors import kneighbors_graph
 from scipy.stats import shapiro
 from scipy.stats import ttest_ind, mannwhitneyu
 from statistics import mean
@@ -119,23 +118,22 @@ class KNNGraphTuner:
                 continue
 
     def _partition(self, graph: nx.Graph, distance_matrix: np.ndarray):
-        # Existing partition method unchanged
         rng = np.random.default_rng(self.seed)
 
-        # Convert unweighted graph to weighted using distance matrix
-        for u, v in graph.edges():
-            graph[u][v]['weight'] = 1 / (distance_matrix[u, v] + 1e-5)  # Add a small constant to avoid division by zero
+        # Gaussian edge weights (σ = median of positive distances)
+        positive_distances = distance_matrix[distance_matrix > 0]
+        sigma = np.median(positive_distances)
 
-        # Use Kernighan-Lin bisection to split the graph into two partitions
+        for u, v in graph.edges():
+            d = distance_matrix[u, v]
+            graph[u][v]["weight"] = np.exp(-(d ** 2) / (2 * sigma ** 2))
+
+        # Kernighan–Lin bisection
         partition = kernighan_lin_bisection(graph, weight="weight", seed=rng)
 
-        # Extract nodes from the partitions
-        group1 = list(partition[0])
-        group2 = list(partition[1])
-
-        # Create subgraphs
-        subgraph1 = graph.subgraph(group1).copy()
-        subgraph2 = graph.subgraph(group2).copy()
+        # Return the two sub‑graphs
+        subgraph1 = graph.subgraph(partition[0]).copy()
+        subgraph2 = graph.subgraph(partition[1]).copy()
 
         return subgraph1, subgraph2
 
@@ -434,3 +432,6 @@ def compare_kernels(batcher_output_dir='./batcher_output', min_k=1, max_k=10, k_
     plt.show()
 
     return results
+
+
+
