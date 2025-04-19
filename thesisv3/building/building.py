@@ -88,31 +88,50 @@ def segments_to_distance_matrices(segments: dict, pickle_dir=None, pickle_file=N
 # Graph Construction & Visualization
 # ===============================
 
-def construct_graph(k: int, distance_matrix: np.ndarray) -> nx.Graph:
-    knn_graph = kneighbors_graph(distance_matrix, n_neighbors=k, mode='connectivity')
-    G = nx.from_scipy_sparse_array(knn_graph)
 
-    # Optional: Add labels from segments if needed
-    # for i in range(len(segments)):
-    #     G.nodes[i]['label'] = np.round(segments[i]['expectancy'].mean(), decimals=2)
-    #     G.nodes[i]['label'] = i
+def construct_graph(k: int, distance_matrix: np.ndarray, force_connectivity: bool = False) -> nx.Graph:
+    # k‑NN matrix whose entries already contain the DTW distance
+    knn = kneighbors_graph(
+        distance_matrix,
+        n_neighbors=k,
+        mode="distance",
+        metric="precomputed"
+    )
 
-    if not nx.is_connected(G):
-        print("The KNN graph is disjoint. Ensuring connectivity...")
-        components = list(nx.connected_components(G))
+    # Make it symmetric (kneighbors_graph is directed)
+    knn = 0.5 * (knn + knn.T)
 
-        for i in range(len(components) - 1):
-            min_dist = np.inf
-            closest_pair = None
-            for node1 in components[i]:
-                for node2 in components[i + 1]:
-                    dist = distance_matrix[node1, node2]
-                    if dist < min_dist:
-                        min_dist = dist
-                        closest_pair = (node1, node2)
-            G.add_edge(*closest_pair)
+    # Build NX graph; keep the distance in edge attr "dist"
+    G = nx.from_scipy_sparse_array(knn, edge_attribute="dist")
+
+    # 4) Convert distance -> similarity weight (Gaussian)
+    sigma = np.median(distance_matrix[distance_matrix > 0])
+    for u, v, attr in G.edges(data=True):
+        d = attr["dist"]
+        attr["weight"] = np.exp(-(d ** 2) / (2 * sigma ** 2))
+
+    # Ensure connectivity, preserving both attrs
+    if not nx.is_connected(G) and force_connectivity:
+        print("The k‑NN graph is disjoint. Ensuring connectivity…")
+        comps = list(nx.connected_components(G))
+        for i in range(len(comps) - 1):
+            best = min(
+                (
+                    (n1, n2, distance_matrix[n1, n2])
+                    for n1 in comps[i] for n2 in comps[i + 1]
+                ),
+                key=lambda x: x[2]   # choose closest pair
+            )
+            u, v, d = best
+            G.add_edge(
+                u, v,
+                dist=d,
+                weight=np.exp(-(d ** 2) / (2 * sigma ** 2))
+            )
 
     return G
+
+
 
 def distance_matrix_to_knn_graph(k: int, distance_matrix: np.array, graph_title: str,
                                  seed: int, iterations: int, force_connect=False, show_labels=False):
@@ -131,23 +150,7 @@ def distance_matrix_to_knn_graph(k: int, distance_matrix: np.array, graph_title:
     Returns:
         None (displays plot)
     """
-    knn_graph = kneighbors_graph(distance_matrix, n_neighbors=k, mode='connectivity')
-    G = nx.from_scipy_sparse_array(knn_graph)
-
-    if not nx.is_connected(G) and force_connect:
-        print("Connecting disjoint graph components...")
-        components = list(nx.connected_components(G))
-
-        for i in range(len(components) - 1):
-            min_dist = np.inf
-            closest_pair = None
-            for node1 in components[i]:
-                for node2 in components[i + 1]:
-                    dist = distance_matrix[node1, node2]
-                    if dist < min_dist:
-                        min_dist = dist
-                        closest_pair = (node1, node2)
-            G.add_edge(closest_pair[0], closest_pair[1])
+    G = construct_graph(k, distance_matrix, force_connect)
 
     pos = nx.spring_layout(G, seed=seed, iterations=iterations)
     nx.draw(G, node_size=50, pos=pos)
@@ -192,34 +195,8 @@ def distance_matrices_to_knn_graphs(k: int, distance_matrices: dict, seed: int, 
 
     axes_flat = axes.flatten()
 
-    for i, (composer, distance_matrix) in enumerate(distance_matrices.items()):
-        if i >= len(axes_flat):
-            break
-
-        ax = axes_flat[i]
-        knn_graph = kneighbors_graph(distance_matrix, n_neighbors=k, mode='connectivity')
-        G = nx.from_scipy_sparse_array(knn_graph)
-
-        # Check if we need to force connectivity
-        if force_connectivity and not nx.is_connected(G):
-            print(f"The KNN graph for {composer} is disjoint. Ensuring connectivity...")
-
-            # Calculate the connected components
-            components = list(nx.connected_components(G))
-
-            # Connect the components
-            for j in range(len(components) - 1):
-                min_dist = np.inf
-                closest_pair = None
-                for node1 in components[j]:
-                    for node2 in components[j + 1]:
-                        dist = distance_matrix[node1, node2]
-                        if dist < min_dist:
-                            min_dist = dist
-                            closest_pair = (node1, node2)
-
-                # Add an edge between the closest pair of nodes from different components
-                G.add_edge(closest_pair[0], closest_pair[1])
+    for ax, (composer, distance_matrix) in zip(axes, distance_matrices.items()):
+        G = construct_graph(k, distance_matrix, force_connectivity)
 
         # Apply the selected layout algorithm
         if layout_type == "spring":
