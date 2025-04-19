@@ -1,6 +1,10 @@
 from music21 import converter
 from sklearn.manifold import MDS
-
+import matplotlib.pyplot as plt
+import numpy as np
+import networkx as nx
+from sklearn.neighbors import kneighbors_graph
+import os
 from thesisv3.preprocessing.preprocessing import *
 from thesisv3.utils import worker
 from thesisv3.utils.helpers import *
@@ -130,6 +134,101 @@ def distance_matrix_to_knn_graph(k: int, distance_matrix: np.array, graph_title:
     plt.show()
 
 
+def distance_matrices_to_knn_graphs(k: int, distance_matrices: dict, seed: int, iterations: int,
+                                    save_figures: bool = False, output_dir: str = "./Output/figures",
+                                    layout_type: str = "spring", force_connectivity: bool = False):
+    """
+    Creates KNN graphs from distance matrices and plots them in a grid layout.
+
+    Parameters:
+    k (int): Number of nearest neighbors for the KNN graph.
+    distance_matrices (dict): Dictionary where keys are composer names and values are distance matrices.
+    seed (int): Random seed for layout algorithms that use randomization.
+    iterations (int): Number of iterations for iterative layout algorithms.
+    save_figures (bool, optional): Whether to save individual figures. Defaults to False.
+    output_dir (str, optional): Directory to save figures to. Defaults to "./Output/figures".
+    layout_type (str, optional): Layout algorithm to use: "spring", "kamada", "spectral". Defaults to "spring".
+    force_connectivity (bool, optional): Whether to force the graph to be connected. Defaults to False.
+    """
+    if save_figures and not os.path.exists(output_dir):
+        os.makedirs(output_dir)
+
+    num_graphs = len(distance_matrices)
+    rows_needed = (num_graphs + 1) // 2
+    fig, axes = plt.subplots(rows_needed, 2, figsize=(12, rows_needed * 5))
+
+    if rows_needed == 1 and num_graphs == 1:
+        axes = np.array([[axes]])
+    elif num_graphs > 1:
+        axes = np.array(axes)
+        if axes.ndim == 1:
+            axes = axes.reshape(1, -1)
+
+    axes_flat = axes.flatten()
+
+    for i, (composer, distance_matrix) in enumerate(distance_matrices.items()):
+        if i >= len(axes_flat):
+            break
+
+        ax = axes_flat[i]
+        knn_graph = kneighbors_graph(distance_matrix, n_neighbors=k, mode='connectivity')
+        G = nx.from_scipy_sparse_array(knn_graph)
+
+        # Check if we need to force connectivity
+        if force_connectivity and not nx.is_connected(G):
+            print(f"The KNN graph for {composer} is disjoint. Ensuring connectivity...")
+
+            # Calculate the connected components
+            components = list(nx.connected_components(G))
+
+            # Connect the components
+            for j in range(len(components) - 1):
+                min_dist = np.inf
+                closest_pair = None
+                for node1 in components[j]:
+                    for node2 in components[j + 1]:
+                        dist = distance_matrix[node1, node2]
+                        if dist < min_dist:
+                            min_dist = dist
+                            closest_pair = (node1, node2)
+
+                # Add an edge between the closest pair of nodes from different components
+                G.add_edge(closest_pair[0], closest_pair[1])
+
+        # Apply the selected layout algorithm
+        if layout_type == "spring":
+            pos = nx.spring_layout(G, seed=seed, iterations=iterations, scale=2.0, center=(0, 0))
+        elif layout_type == "kamada":
+            pos = nx.kamada_kawai_layout(G)
+        elif layout_type == "spectral":
+            pos = nx.spectral_layout(G)
+        else:
+            # Default to spring layout if invalid option
+            pos = nx.spring_layout(G, seed=seed, iterations=iterations, scale=2.0, center=(0, 0))
+
+        nx.draw(G, node_size=50, pos=pos, ax=ax)
+        ax.set_title(f"{composer} (K={k})")
+        ax.axis('off')
+
+        if save_figures:
+            fig_individual, ax_individual = plt.subplots(figsize=(6, 5))
+            nx.draw(G, node_size=50, pos=pos, ax=ax_individual)
+            ax_individual.set_title(f"{composer} (K={k})")
+            ax_individual.axis('off')
+
+            safe_filename = composer.replace('|', '-').replace(':', '-').replace('\\', '-').replace('/', '-').replace(
+                '*', '-').replace('?', '-').replace('"', '-').replace('<', '-').replace('>', '-')
+            output_path = os.path.join(output_dir, f"{safe_filename}_KNN_graph.png")
+            fig_individual.savefig(output_path)
+            plt.close(fig_individual)
+
+    for ax in axes_flat[num_graphs:]:
+        ax.axis('off')
+
+    plt.tight_layout()
+    plt.show()
+
+
 def distance_matrix_to_knn_graph_scaled(k: int, distance_matrix: np.array, graph_title: str,
                                         seed: int):
     """
@@ -176,7 +275,6 @@ def distance_matrix_to_knn_graph_scaled(k: int, distance_matrix: np.array, graph
     plt.axis('equal')
     plt.axis('off')
     plt.show()
-
 
 
 # ===============================

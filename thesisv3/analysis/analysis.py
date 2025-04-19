@@ -53,12 +53,12 @@ def kernighan_lin_partition(distance_matrix, seed=None):
     tuple: (group_1, group_2)
         Two arrays of node indices representing the partition
     """
-    import numpy as np
-    import networkx as nx
-
     # Create a graph from the distance matrix
     n = distance_matrix.shape[0]
     graph = nx.Graph()
+
+    # diagonal 0 sanity check
+    np.fill_diagonal(distance_matrix, 0.0)
 
     # Add all nodes
     for i in range(n):
