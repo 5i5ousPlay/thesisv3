@@ -102,9 +102,6 @@ class MusicSegmentAnalyzer:
 
         else:
             nmat, narr, sarr = parse_score_elements(self.parsed_score)
-            # nmat['mobility'] = mobility(nmat) # calculate mobility and add column to raw nmat
-            # nmat['tessitura'] = tessitura(nmat) # calculate tessitura and add column to raw nmat
-            # nmat['expectancy'] = calculate_note_expectancy_scores(nmat)
 
             ir_symbols = assign_ir_symbols(narr)
             self.ir_symbols = ir_symbols
@@ -202,22 +199,24 @@ class MusicVisualizer:
 
 
 class GraphBuilder:
-    def __init__(self, k: int, distance_matrix: np.ndarray):
+    def __init__(self, k: int, distance_matrix: np.ndarray, force_connectivity=False):
+        self.force_connectivity = force_connectivity
         self.k = k
         self.graph = None
         self.distance_matrix = distance_matrix
 
     def construct_graph(self):
-        self.graph = construct_graph(self.k, self.distance_matrix)
+        self.graph = construct_graph(self.k, self.distance_matrix, force_connectivity=self.force_connectivity)
         return self.graph
 
 
 
 class GraphBatcher:
-    def __init__(self, k=5, output_dir='./Output/batcher_output'):
+    def __init__(self, k=5, output_dir='./Output/batcher_output', force_connectivity=False):
         self.k = k
         self.graphs = []
         self.graph_dict = {}
+        self.force_connectivity = force_connectivity
 
         self.segments = []
         self.segment_dict = {}
@@ -253,12 +252,7 @@ class GraphBatcher:
             print(f"Analyzing {file}")
             try:
                 self.analyzer.run(self.file_manager.files[file])
-                builder = GraphBuilder(self.k,
-                                       self.analyzer.distance_matrix,
-                                       self.analyzer.prepped_segments)
-
-                # Create the graph
-                graph = builder.construct_graph()
+                graph = construct_graph(self.k, self.analyzer.distance_matrix, self.analyzer.prepped_segments, force_connectivity=self.force_connectivity)
 
                 # Add to lists
                 self.graphs.append(graph)
@@ -293,13 +287,8 @@ class GraphBatcher:
             try:
                 # Get the distance matrix and segments from dictionaries
                 distance_matrix = self.distmat_dict[file]
-                segments = self.segment_dict[file]
 
-                # Create a graph builder
-                builder = GraphBuilder(self.k, distance_matrix, segments)
-
-                # Construct the graph
-                graph = builder.construct_graph()
+                graph = construct_graph(self.k, distance_matrix, self.segment_dict[file], force_connectivity=self.force_connectivity)
 
                 # Add to list and dictionary
                 self.graphs.append(graph)
