@@ -1340,3 +1340,91 @@ def calculate_note_expectancy_scores(nmat: pd.DataFrame) -> np.ndarray:
     expectancy_scores[0] = 0.5
 
     return expectancy_scores
+
+
+def encode_note_expectancy_score(p1, p2, p3, mode='5-factor') -> float:
+    """
+    Calculates the expectancy score for the center note
+    in a three note sequence.
+
+    :params p1,p2,p3 (floats): note pitches
+    :param mode (str): specifies if 5 or 2 factor calculation
+
+    :returns out(float): expectancy score for p2
+    """
+    SMALL = 5  # ≤5 st = “small”
+    LARGE = 7  # ≥7 st = “large”
+    BETA_5 = np.array([0.23, 0.19, 0.21, -0.42, 0.15])
+    BETA_2 = np.array([0.604, 0.379])
+
+    d1 = np.sign(p2 - p1)
+    d2 = np.sign(p3 - p2)
+    s1 = abs(p2 - p1)
+    s2 = abs(p3 - p2)
+
+    # Registral Direction
+    if s1 <= SMALL:
+        reg_dir = int(d1 == d2)
+    elif s1 >= LARGE:
+        reg_dir = int(d1 != d2)
+    else:
+        reg_dir = 0
+
+    # Intervallic Difference
+    if d1 == d2:
+        interv_diff = int(abs(s2 - s1) <= 3)
+    else:
+        interv_diff = int(abs(s2 - s1) <= 2)
+
+    # Registral Return
+    retdiff = abs(p3 - p1)
+    if retdiff == 0:
+        reg_return = 3
+    elif retdiff <= 2:
+        reg_return = 2
+    elif retdiff <= 4:
+        reg_return = 1
+    else:
+        reg_return = 0
+
+    # Proximity
+    proximity = max(0, min(6, 6 - s2))
+
+    # Closure
+    closure = int(d1 != d2) + int(s2 < s1)
+
+    if mode == '5-factor':
+        vec = np.array([reg_dir, interv_diff, reg_return, proximity, closure])
+        vec[3] = 6 - vec[3]
+        return np.dot(vec, BETA_5)
+    elif mode == '2-factor':
+        pp = 6 - proximity  # reverse proximity score
+        if reg_dir == 1:
+            pr = 1
+        elif reg_dir == 0:
+            pr = 0
+        elif reg_return >= 2:
+            pr = 1.5
+        else:
+            pr = -1
+        vec = np.array([pp, pr])
+        return np.dot(vec, BETA_2)
+    else:
+        raise ValueError("Provided mode does not exist. Only modes are '5-factor' and '2-factor'")
+
+
+def segment_expectancy(segment_exp: pd.Series, mode='mean'):
+    """
+    Calculates the aggregated expectancy of a segment.
+
+    :param segment_exp (pd.Series): expectancy scores of notes in a segment
+    :param mode (str): specifies the mode for calculating segment expectancy
+    :return: aggregated expectancy of segment
+    """
+    if mode == 'mean':
+        return segment_exp.mean()
+    elif mode == 'surprisal':
+        p = np.exp(segment_exp) / np.exp(segment_exp).sum()
+        return -(np.log(p).mean())
+    else:
+        raise ValueError("Mode does not exist. Specify either 'mean' or 'surprisal' only")
