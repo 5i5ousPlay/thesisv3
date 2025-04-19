@@ -4,6 +4,7 @@ import pandas as pd
 from grakel import Graph
 from grakel.kernels import WeisfeilerLehman
 from networkx import Graph
+from networkx.algorithms.community import kernighan_lin_bisection
 from numpy.linalg import eigh
 from scipy.sparse import csgraph
 from sklearn.neighbors import kneighbors_graph
@@ -36,7 +37,7 @@ def spectral_partition(distance_matrix):
     return np.where(partition)[0], np.where(~partition)[0]
 
 
-def kernighan_lin_partition(distance_matrix, seed=None):
+def kernighan_lin_partition(graph, distance_matrix, seed=None):
     """
     Partition a set of nodes using the Kernighan-Lin algorithm based on a distance matrix.
     Returns two groups of node indices similar to the spectral_partition function.
@@ -53,36 +54,24 @@ def kernighan_lin_partition(distance_matrix, seed=None):
     tuple: (group_1, group_2)
         Two arrays of node indices representing the partition
     """
-    # Create a graph from the distance matrix
-    n = distance_matrix.shape[0]
-    graph = nx.Graph()
-
-    # diagonal 0 sanity check
-    np.fill_diagonal(distance_matrix, 0.0)
-
-    # Add all nodes
-    for i in range(n):
-        graph.add_node(i)
-
-    # Add edges with weights based on inverse distance
-    for i in range(n):
-        for j in range(i+1, n):
-            if distance_matrix[i, j] > 0:  # Only add edges for non-zero distances
-                # Convert distance to weight (inverse of distance)
-                weight = 1 / (distance_matrix[i, j] + 1e-5)  # Add small constant to avoid division by zero
-                graph.add_edge(i, j, weight=weight)
-
-    # Set random seed
     rng = np.random.default_rng(seed)
 
-    # Use Kernighan-Lin bisection
-    partition = nx.algorithms.community.kernighan_lin_bisection(graph, weight="weight", seed=rng)
+    # Gaussian edge weights (σ = median of positive distances)
+    positive_distances = distance_matrix[distance_matrix > 0]
+    sigma = np.median(positive_distances)
 
-    # Extract nodes from the partitions
-    group_1 = np.array(list(partition[0]))
-    group_2 = np.array(list(partition[1]))
+    for u, v in graph.edges():
+        d = distance_matrix[u, v]
+        graph[u][v]["weight"] = np.exp(-(d ** 2) / (2 * sigma ** 2))
 
-    return group_1, group_2
+    # Kernighan–Lin bisection
+    partition = kernighan_lin_bisection(graph, weight="weight", seed=rng)
+
+    # Return the two sub‑graphs
+    subgraph1 = graph.subgraph(partition[0]).copy()
+    subgraph2 = graph.subgraph(partition[1]).copy()
+
+    return subgraph1, subgraph2
 
 
 def get_sub_distance_matrix(distance_matrix, group_indices):
