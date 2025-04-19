@@ -7,7 +7,7 @@ from music21 import converter, environment
 
 from thesisv3.analysis.visualization import *
 from thesisv3.preprocessing.preprocessing import *
-from thesisv3.building.building import distance_matrix_to_knn_graph_scaled
+from thesisv3.building.building import distance_matrix_to_knn_graph_scaled, construct_graph
 from thesisv3.utils.file_manager import MusicFileManager
 from thesisv3.utils.helpers import save_to_pickle
 
@@ -202,38 +202,15 @@ class MusicVisualizer:
 
 
 class GraphBuilder:
-    def __init__(self, k: int, distance_matrix: np.ndarray, segments: list[pd.DataFrame]):
+    def __init__(self, k: int, distance_matrix: np.ndarray):
         self.k = k
         self.graph = None
-        self.graphs = None
         self.distance_matrix = distance_matrix
-        self.segments = segments
 
     def construct_graph(self):
-        knn_graph = kneighbors_graph(self.distance_matrix, n_neighbors=self.k, mode='connectivity')
-        G = nx.from_scipy_sparse_array(knn_graph)
+        self.graph = construct_graph(self.k, self.distance_matrix)
+        return self.graph
 
-        # for i in range(len(self.segments)):
-        #     G.nodes[i]['label'] = np.round(self.segments[i]['expectancy'].mean(), decimals=2)
-        #     G.nodes[i]['label'] = i
-
-        if not nx.is_connected(G):
-            print("The KNN graph is disjoint. Ensuring connectivity...")
-
-            components = list(nx.connected_components(G))
-
-            for i in range(len(components) - 1):
-                min_dist = np.inf
-                closest_pair = None
-                for node1 in components[i]:
-                    for node2 in components[i + 1]:
-                        dist = self.distance_matrix[node1, node2]
-                        if dist < min_dist:
-                            min_dist = dist
-                            closest_pair = (node1, node2)
-                G.add_edge(closest_pair[0], closest_pair[1])
-        self.graph = G
-        return G
 
 
 class GraphBatcher:
