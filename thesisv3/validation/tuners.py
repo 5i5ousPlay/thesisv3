@@ -1,51 +1,16 @@
 import os
 import pickle
-import traceback
-import grakel
-import numpy as np
-import networkx as nx
 
+import grakel
+import grakel as gk
+import matplotlib.pyplot as plt
+import numpy as np
 import pandas as pd
 from scipy.stats import shapiro
 from scipy.stats import ttest_ind, mannwhitneyu
-from statistics import mean
-from networkx.algorithms.community import kernighan_lin_bisection
-from sklearn.neighbors import kneighbors_graph
-
-from thesisv3.utils.helpers import compare_graphs_kernel
-from thesisv3.classism import GraphBuilder, MusicSegmentAnalyzer, MusicFileManager
-import matplotlib.pyplot as plt
-import grakel as gk
 from statsmodels.stats.multitest import multipletests
 
 from thesisv3.validation.comparison import compare_within_and_between_pieces
-
-
-def construct_graph(k: int, distance_matrix: np.ndarray, segments: list[pd.DataFrame]) -> nx.Graph:
-    knn_graph = kneighbors_graph(distance_matrix, n_neighbors=k, mode='connectivity')
-    G = nx.from_scipy_sparse_array(knn_graph)
-
-    # Optional: Add labels from segments if needed
-    # for i in range(len(segments)):
-    #     G.nodes[i]['label'] = np.round(segments[i]['expectancy'].mean(), decimals=2)
-    #     G.nodes[i]['label'] = i
-
-    if not nx.is_connected(G):
-        print("The KNN graph is disjoint. Ensuring connectivity...")
-        components = list(nx.connected_components(G))
-
-        for i in range(len(components) - 1):
-            min_dist = np.inf
-            closest_pair = None
-            for node1 in components[i]:
-                for node2 in components[i + 1]:
-                    dist = distance_matrix[node1, node2]
-                    if dist < min_dist:
-                        min_dist = dist
-                        closest_pair = (node1, node2)
-            G.add_edge(*closest_pair)
-
-    return G
 
 
 class KNNGraphTuner:
@@ -60,18 +25,14 @@ class KNNGraphTuner:
                  min_k=1,
                  max_k=10,
                  k_step=1,
-                 output_dir='./tuner_output',
-                 batcher_output_dir=None):
+                 output_dir='./Output/tuner_output',
+                 batcher_dir='./Output/batcher_output'):
         """
-        Initializes a Tuner instance.
-        Args:
-            graph_kernel (grakel.kernels.Kernel): Graph kernel used for calculating within and between graph scores
-            seed (int): RNG seed for reproducibility
-            min_k (int): minimum k value to test
-            max_k (int): maximum k value to test
-            k_step (int): interval step for k value testing
-            output_dir (str): directory to save progress and results
-            batcher_output_dir (str, optional): path to the GraphBatcher output directory to use instead of processing files again
+        Initializes a Tuner instance. Args: graph_kernel (grakel.kernels.Kernel): Graph kernel used for calculating
+        within and between graph scores seed (int): RNG seed for reproducibility min_k (int): minimum k value to test
+        max_k (int): maximum k value to test k_step (int): interval step for k value testing output_dir (str):
+        directory to save progress and results batcher_output_dir (str, optional): path to the GraphBatcher output
+        directory to use instead of processing files again
         """
         self.distance_matrices = []
         self.segments = []
@@ -80,8 +41,6 @@ class KNNGraphTuner:
         self.min_k = min_k
         self.max_k = max_k
         self.k_step = k_step
-        self.file_manager = MusicFileManager()
-        self.analyzer = MusicSegmentAnalyzer()
 
         # Track processed files
         self.processed_files = []
@@ -93,88 +52,38 @@ class KNNGraphTuner:
         # Create output directory if it doesn't exist
         self.output_dir = output_dir
         os.makedirs(self.output_dir, exist_ok=True)
+        self.batcher_dir = batcher_dir
 
         # Define paths for each pickle file
-        self.segments_path = os.path.join(self.output_dir, 'tuner_segments.pkl')
-        self.distmat_path = os.path.join(self.output_dir, 'tuner_distance_matrices.pkl')
-        self.processed_files_path = os.path.join(self.output_dir, 'tuner_processed_files.pkl')
+        self.segments_path = os.path.join(self.batcher_dir, 'segments.pkl')
+        self.distmat_path = os.path.join(self.batcher_dir, 'distance_matrices.pkl')
+        self.processed_files_path = os.path.join(self.batcher_dir, 'processed_files.pkl')
         self.results_path = os.path.join(self.output_dir, 'tuner_results.pkl')
 
         # Dictionary to store results for each k value
         self.results = {}
 
         # Flag to track if we're using batcher data
-        self.using_batcher_data = batcher_output_dir is not None
-
-        # Load previous progress or batcher data
-        if self.using_batcher_data:
-            self.load_from_batcher(batcher_output_dir)
-        else:
-            self.load_progress()
-
-    def _calculate_segments_and_distance_matrix(self) -> None:
-        """
-        Analyze files to generate segments and distance matrices, with progress tracking.
-        """
-        # If we're using batcher data, skip the file processing
-        if self.using_batcher_data and self.processed_files:
-            print(f"Using pre-processed data from GraphBatcher ({len(self.processed_files)} files)")
-            return
-
-        for file in self.file_manager.files:
-            # Skip files we've already processed
-            if file in self.processed_files:
-                print(f"Skipping already processed file: {file}")
-                continue
-
-            print(f"Analyzing {file}")
-            try:
-                self.analyzer.run(self.file_manager.files[file])
-                if not np.isnan(self.analyzer.distance_matrix).any():
-                    # Add to lists
-                    self.segments.append(self.analyzer.prepped_segments)
-                    self.distance_matrices.append(self.analyzer.distance_matrix)
-                    self.processed_files.append(file)
-
-                    # Add to dictionaries with file as key
-                    self.segment_dict[file] = self.analyzer.prepped_segments
-                    self.distmat_dict[file] = self.analyzer.distance_matrix
-
-                    # Save progress after each file
-                    self.save_progress()
-                else:
-                    print(f"Distance Matrix of {file} has null values and cannot be converted into a graph. Skipping")
-            except Exception as e:
-                print(f"Error parsing: {file} at {self.file_manager.files[file]}. Skipping file")
-                print(traceback.format_exc())
-                continue
-
-    def _partition(self, graph: nx.Graph, distance_matrix: np.ndarray):
-        rng = np.random.default_rng(self.seed)
-
-        # Gaussian edge weights (σ = median of positive distances)
-        positive_distances = distance_matrix[distance_matrix > 0]
-        sigma = np.median(positive_distances)
-
-        for u, v in graph.edges():
-            d = distance_matrix[u, v]
-            graph[u][v]["weight"] = np.exp(-(d ** 2) / (2 * sigma ** 2))
-
-        # Kernighan–Lin bisection
-        partition = kernighan_lin_bisection(graph, weight="weight", seed=rng)
-
-        # Return the two sub‑graphs
-        subgraph1 = graph.subgraph(partition[0]).copy()
-        subgraph2 = graph.subgraph(partition[1]).copy()
-
-        return subgraph1, subgraph2
+        self.load_progress()
 
     def _kernel_based_similarity(self, k: int):
-        # Build the {piece: distance_matrix} dict expected by the helper
-        pieces_dist_mat = self.distmat_dict
+        # Load appropriate knn-graph dictionary
+        def safe_load(path, default_value):
+            if os.path.exists(path):
+                try:
+                    with open(path, 'rb') as f:
+                        return pickle.load(f)
+                except Exception as e:
+                    print(f"Error loading {path}: {e}")
+            return default_value
 
+        graphs_path = os.path.join(self.batcher_dir, f'graphs_k{k}.pkl')
+        graph_dict = safe_load(graphs_path, {})
+        if not graph_dict:
+            print(f'No graphs found for k={k}')
+            return None, None
         # Get a single DataFrame containing BOTH within‑ and between‑piece sims
-        pair_df = compare_within_and_between_pieces(pieces_dist_mat, k)
+        pair_df = compare_within_and_between_pieces(self.distmat_dict, graph_dict, self.graph_kernel, minimum_segments=10)
 
         # Separate the two cases
         within_mask = pair_df['Piece_1'] == pair_df['Piece_2']
@@ -194,7 +103,7 @@ class KNNGraphTuner:
             p-values for each k-value within the specified range.
         """
         if not self.distance_matrices or not self.segments:
-            self._calculate_segments_and_distance_matrix()
+            raise ValueError("Need distance matrices and segments to tune")
 
         cols = ['k',
                 'normality_within', 'normality_between',
@@ -237,7 +146,7 @@ class KNNGraphTuner:
             n1, n2 = len(within), len(between)
             pooled_sd = np.sqrt(((n1 - 1) * np.var(within, ddof=1) +
                                  (n2 - 1) * np.var(between, ddof=1)) / (n1 + n2 - 2))
-            cohens_d = (avg_within - avg_between) / pooled_sd
+            cohens_d = np.inf if pooled_sd==0 else (avg_within - avg_between) / pooled_sd
 
             # AUC (common‑language effect size)
             auc = u_stat / (n1 * n2)
@@ -304,9 +213,6 @@ class KNNGraphTuner:
             os.rename(temp_path, path)
 
         # Save each dictionary to its own file
-        safe_save(self.segment_dict, self.segments_path)
-        safe_save(self.distmat_dict, self.distmat_path)
-        safe_save(self.processed_files, self.processed_files_path)
         safe_save(self.results, self.results_path)
 
         print(f"Progress saved: {len(self.processed_files)} files processed, {len(self.results)} k values calculated")
@@ -338,54 +244,8 @@ class KNNGraphTuner:
             print(f"Loaded previous progress: {len(self.processed_files)} files already processed, "
                   f"{len(self.results)} k values already calculated")
 
-    def load_from_batcher(self, batcher_output_dir):
-        """Load data from a GraphBatcher output directory."""
-        print(f"Attempting to load data from GraphBatcher output directory: {batcher_output_dir}")
 
-        # Define batcher paths
-        batcher_segments_path = os.path.join(batcher_output_dir, 'segments.pkl')
-        batcher_distmat_path = os.path.join(batcher_output_dir, 'distance_matrices.pkl')
-        batcher_processed_files_path = os.path.join(batcher_output_dir, 'processed_files.pkl')
-
-        # Helper function for safe loading
-        def safe_load(path, default_value):
-            if os.path.exists(path):
-                try:
-                    with open(path, 'rb') as f:
-                        return pickle.load(f)
-                except Exception as e:
-                    print(f"Error loading {path}: {e}")
-                    return default_value
-            else:
-                print(f"File not found: {path}")
-                return default_value
-
-        # Load batcher data
-        batcher_segment_dict = safe_load(batcher_segments_path, {})
-        batcher_distmat_dict = safe_load(batcher_distmat_path, {})
-        batcher_processed_files = safe_load(batcher_processed_files_path, [])
-
-        if not batcher_processed_files:
-            print("No data found in the batcher output directory. Will process files directly.")
-            return
-
-        # Import batcher data into tuner
-        self.segment_dict = batcher_segment_dict
-        self.distmat_dict = batcher_distmat_dict
-        self.processed_files = batcher_processed_files
-
-        # Load tuner-specific results if they exist
-        self.results = safe_load(self.results_path, {})
-
-        # Rebuild the lists from the dictionaries
-        self.segments = [self.segment_dict[f] for f in self.processed_files]
-        self.distance_matrices = [self.distmat_dict[f] for f in self.processed_files]
-
-        print(f"Successfully loaded data from GraphBatcher: {len(self.processed_files)} files")
-        print(f"Previously calculated results for {len(self.results)} k values")
-
-
-def compare_kernels(batcher_output_dir='./batcher_output', min_k=1, max_k=10, k_step=1):
+def compare_kernels(batcher_output_dir='./Output/batcher_output', min_k=2, max_k=10, k_step=1):
     """
     Benchmark several graph‑kernel families on the **same** music dataset,
     plotting FDR‑corrected p‑values (and saving the raw DataFrames).
@@ -393,14 +253,14 @@ def compare_kernels(batcher_output_dir='./batcher_output', min_k=1, max_k=10, k_
     Returns
     -------
     dict
-        Maps kernel‑name → results DataFrame (columns include *parametric_p,
+        Maps kernel‑name → results DataFrame (columns include *parametric_p,
         parametric_p_adj, non_parametric_p, non_parametric_p_adj, cohens_d, auc*).
     """
     # ── 1. Kernels to evaluate ────────────────────────────────────────────────
     kernels = {
-        'WeisfeilerLehman': gk.WeisfeilerLehman(normalize=True),
+        'WeisfeilerLehman': gk.WeisfeilerLehman(n_iter=5, normalize=True),
         'ShortestPath': gk.ShortestPath(normalize=True),
-        'GraphletSampling': gk.GraphletSampling(normalize=True),
+        # 'GraphletSampling': gk.GraphletSampling(normalize=True),
         'RandomWalkLabeled': gk.RandomWalkLabeled(),
         'WeisfeilerLehman (raw)': gk.WeisfeilerLehman(normalize=False),
         'ShortestPath (raw)': gk.ShortestPath(normalize=False),
@@ -415,7 +275,7 @@ def compare_kernels(batcher_output_dir='./batcher_output', min_k=1, max_k=10, k_
 
         tuner = KNNGraphTuner(
             graph_kernel=kernel,
-            batcher_output_dir=batcher_output_dir,
+            batcher_dir=batcher_output_dir,
             min_k=min_k,
             max_k=max_k,
             k_step=k_step,
@@ -463,5 +323,3 @@ def compare_kernels(batcher_output_dir='./batcher_output', min_k=1, max_k=10, k_
         fig.show()
 
     return results
-
-
