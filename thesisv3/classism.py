@@ -217,21 +217,21 @@ class GraphBuilder:
         #     G.nodes[i]['label'] = np.round(self.segments[i]['expectancy'].mean(), decimals=2)
         #     G.nodes[i]['label'] = i
 
-        # if not nx.is_connected(G):
-        #     print("The KNN graph is disjoint. Ensuring connectivity...")
-        #
-        #     components = list(nx.connected_components(G))
-        #
-        #     for i in range(len(components) - 1):
-        #         min_dist = np.inf
-        #         closest_pair = None
-        #         for node1 in components[i]:
-        #             for node2 in components[i + 1]:
-        #                 dist = self.distance_matrix[node1, node2]
-        #                 if dist < min_dist:
-        #                     min_dist = dist
-        #                     closest_pair = (node1, node2)
-        #         G.add_edge(closest_pair[0], closest_pair[1])
+        if not nx.is_connected(G):
+            print("The KNN graph is disjoint. Ensuring connectivity...")
+
+            components = list(nx.connected_components(G))
+
+            for i in range(len(components) - 1):
+                min_dist = np.inf
+                closest_pair = None
+                for node1 in components[i]:
+                    for node2 in components[i + 1]:
+                        dist = self.distance_matrix[node1, node2]
+                        if dist < min_dist:
+                            min_dist = dist
+                            closest_pair = (node1, node2)
+                G.add_edge(closest_pair[0], closest_pair[1])
         self.graph = G
         return G
 
@@ -257,7 +257,8 @@ class GraphBatcher:
         os.makedirs(self.output_dir, exist_ok=True)
 
         # Define paths for each pickle file
-        self.graphs_path = os.path.join(self.output_dir, 'graphs.pkl')
+        # self.graphs_path = os.path.join(self.output_dir, 'graphs.pkl')
+        self.graphs_path = os.path.join(self.output_dir, f'graphs_k{self.k}.pkl')
         self.segments_path = os.path.join(self.output_dir, 'segments.pkl')
         self.distmat_path = os.path.join(self.output_dir, 'distance_matrices.pkl')
         self.processed_files_path = os.path.join(self.output_dir, 'processed_files.pkl')
