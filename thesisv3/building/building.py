@@ -87,9 +87,17 @@ def segments_to_distance_matrices(segments: dict, pickle_dir=None, pickle_file=N
 # ===============================
 # Graph Construction & Visualization
 # ===============================
+def _bin_expectancy(e: float) -> str:
+    _EXP_CUTS = [0.15, 0.30, 0.50, 0.65, 0.83]
+    _EXP_LABELS = ["VeryLow", "Low", "Medium", "High", "VeryHigh"]
+    for cut, lab in zip(_EXP_CUTS, _EXP_LABELS):
+        if e <= cut:
+            return lab
+    return _EXP_LABELS[-1]
 
 
-def construct_graph(k: int, distance_matrix: np.ndarray, force_connectivity: bool = False) -> nx.Graph:
+def construct_graph(k: int, distance_matrix: np.ndarray, segments: list[pd.DataFrame],
+                    force_connectivity: bool = True) -> nx.Graph:
     # k‑NN matrix whose entries already contain the DTW distance
     knn = kneighbors_graph(
         distance_matrix,
@@ -108,6 +116,7 @@ def construct_graph(k: int, distance_matrix: np.ndarray, force_connectivity: boo
     sigma = np.median(distance_matrix[distance_matrix > 0])
     for u, v, attr in G.edges(data=True):
         d = attr["dist"]
+        # attr["weight"] = d
         attr["weight"] = np.exp(-(d ** 2) / (2 * sigma ** 2))
 
     # Ensure connectivity, preserving both attrs
@@ -120,7 +129,7 @@ def construct_graph(k: int, distance_matrix: np.ndarray, force_connectivity: boo
                     (n1, n2, distance_matrix[n1, n2])
                     for n1 in comps[i] for n2 in comps[i + 1]
                 ),
-                key=lambda x: x[2]   # choose closest pair
+                key=lambda x: x[2]  # choose closest pair
             )
             u, v, d = best
             G.add_edge(
@@ -128,9 +137,16 @@ def construct_graph(k: int, distance_matrix: np.ndarray, force_connectivity: boo
                 dist=d,
                 weight=np.exp(-(d ** 2) / (2 * sigma ** 2))
             )
+    for idx, seg in enumerate(segments):
+        mean_e = float(seg['expectancy'].mean())
+        e_bin = _bin_expectancy(mean_e)
+        # pick the most frequent I‑R symbol in the segment
+        ir_mode = seg['ir_symbol'].mode().iat[0] if not seg['ir_symbol'].mode().empty else "None"
 
+        G.nodes[idx]['label'] = f"{e_bin}|{ir_mode}"
+        # print(f"{e_bin}|{ir_mode}")
+        G.nodes[idx]['expectancy'] = mean_e
     return G
-
 
 
 def distance_matrix_to_knn_graph(k: int, distance_matrix: np.array, graph_title: str,
@@ -163,7 +179,7 @@ def distance_matrix_to_knn_graph(k: int, distance_matrix: np.array, graph_title:
     plt.show()
 
 
-def distance_matrices_to_knn_graphs(k: int, distance_matrices: dict, seed: int, iterations: int,
+def distance_matrices_to_knn_graphs(k: int, distance_matrices: dict, segments: dict, seed: int, iterations: int,
                                     save_figures: bool = False, output_dir: str = "./Output/figures",
                                     layout_type: str = "spring", force_connectivity: bool = False):
     """
@@ -195,8 +211,8 @@ def distance_matrices_to_knn_graphs(k: int, distance_matrices: dict, seed: int, 
 
     axes_flat = axes.flatten()
 
-    for ax, (composer, distance_matrix) in zip(axes, distance_matrices.items()):
-        G = construct_graph(k, distance_matrix, force_connectivity)
+    for ax, (composer, distance_matrix) in zip(axes_flat, distance_matrices.items()):
+        G = construct_graph(k, distance_matrix, segments[composer], force_connectivity)
 
         # Apply the selected layout algorithm
         if layout_type == "spring":
