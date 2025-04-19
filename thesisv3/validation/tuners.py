@@ -10,10 +10,42 @@ from scipy.stats import shapiro
 from scipy.stats import ttest_ind, mannwhitneyu
 from statistics import mean
 from networkx.algorithms.community import kernighan_lin_bisection
+from sklearn.neighbors import kneighbors_graph
+
 from thesisv3.utils.helpers import compare_graphs_kernel
 from thesisv3.classism import GraphBuilder, MusicSegmentAnalyzer, MusicFileManager
 import matplotlib.pyplot as plt
 import grakel as gk
+from statsmodels.stats.multitest import multipletests
+
+from thesisv3.validation.comparison import compare_within_and_between_pieces
+
+
+def construct_graph(k: int, distance_matrix: np.ndarray, segments: list[pd.DataFrame]) -> nx.Graph:
+    knn_graph = kneighbors_graph(distance_matrix, n_neighbors=k, mode='connectivity')
+    G = nx.from_scipy_sparse_array(knn_graph)
+
+    # Optional: Add labels from segments if needed
+    # for i in range(len(segments)):
+    #     G.nodes[i]['label'] = np.round(segments[i]['expectancy'].mean(), decimals=2)
+    #     G.nodes[i]['label'] = i
+
+    if not nx.is_connected(G):
+        print("The KNN graph is disjoint. Ensuring connectivity...")
+        components = list(nx.connected_components(G))
+
+        for i in range(len(components) - 1):
+            min_dist = np.inf
+            closest_pair = None
+            for node1 in components[i]:
+                for node2 in components[i + 1]:
+                    dist = distance_matrix[node1, node2]
+                    if dist < min_dist:
+                        min_dist = dist
+                        closest_pair = (node1, node2)
+            G.add_edge(*closest_pair)
+
+    return G
 
 
 class KNNGraphTuner:
@@ -138,32 +170,18 @@ class KNNGraphTuner:
         return subgraph1, subgraph2
 
     def _kernel_based_similarity(self, k: int):
-        # Existing kernel similarity method unchanged
-        within_graph_scores = []
-        between_graph_scores = []
+        # Build the {piece: distance_matrix} dict expected by the helper
+        pieces_dist_mat = self.distmat_dict
 
-        whole_graphs = []
-        for distance_matrix, segments in zip(self.distance_matrices, self.segments):
-            builder = GraphBuilder(k=k, distance_matrix=distance_matrix, segments=segments)
-            graph = builder.construct_graph()
-            whole_graphs.append(graph)
+        # Get a single DataFrame containing BOTH within‑ and between‑piece sims
+        pair_df = compare_within_and_between_pieces(pieces_dist_mat, k)
 
-        distance_matrices = self.distance_matrices
+        # Separate the two cases
+        within_mask = pair_df['Piece_1'] == pair_df['Piece_2']
+        within_scores = pair_df.loc[within_mask, 'Between_Similarity'].tolist()
+        between_scores = pair_df.loc[~within_mask, 'Between_Similarity'].tolist()
 
-        for graph, distance_matrix in zip(whole_graphs, distance_matrices):
-            partition1, partition2 = self._partition(graph=graph, distance_matrix=distance_matrix)
-            similarity_within = compare_graphs_kernel([partition1, partition2], self.graph_kernel)[0, 1]
-            within_graph_scores.append(similarity_within)
-
-        for i in range(len(whole_graphs)):
-            for j in range(i + 1, len(whole_graphs)):
-                whole_graph_1 = whole_graphs[i]
-                whole_graph_2 = whole_graphs[j]
-
-                similarity_between = compare_graphs_kernel([whole_graph_1, whole_graph_2], self.graph_kernel)[0, 1]
-                between_graph_scores.append(similarity_between)
-
-        return within_graph_scores, between_graph_scores
+        return within_scores, between_scores
 
     def calculate_graph_statistics(self) -> pd.DataFrame:
         """
@@ -178,38 +196,57 @@ class KNNGraphTuner:
         if not self.distance_matrices or not self.segments:
             self._calculate_segments_and_distance_matrix()
 
-        graph_statistics = pd.DataFrame(columns=['k', 'normality_wtihin', 'normality_between', 'average_within',
-                                                 'average_between', 'parametric_p_value', 'non_parametric_p_value'])
+        cols = ['k',
+                'normality_within', 'normality_between',
+                'average_within', 'average_between',
+                'parametric_p', 'non_parametric_p',
+                'cohens_d', 'auc']
+        graph_statistics = pd.DataFrame(columns=cols)
 
         # Check if we have cached results for any k values
         for k in range(self.min_k, self.max_k, self.k_step):
             if k in self.results:
                 print(f"Using cached results for k = {k}")
-                idx = len(graph_statistics)
-                result = self.results[k]
-                graph_statistics.loc[idx] = result
+                graph_statistics.loc[len(graph_statistics)] = self.results[k]
                 continue
 
             idx = len(graph_statistics)
             print(f"Calculating graph statistics at k = {k}")
-            within_graph_scores, between_graph_scores = self._kernel_based_similarity(k)
+            within, between = self._kernel_based_similarity(k)
 
             # Normality tests
-            stat, p_value_within = shapiro(within_graph_scores)
-            stat, p_value_between = shapiro(between_graph_scores)
+            _, p_norm_within = shapiro(within)
+            _, p_norm_between = shapiro(between)
 
             # Average Scores
-            avg_within = mean(within_graph_scores)
-            avg_between = mean(between_graph_scores)
+            avg_within = np.mean(within)
+            avg_between = np.mean(between)
 
             # Parametric test
-            t_stat, p_value = ttest_ind(within_graph_scores, between_graph_scores)
+            # equal_var=False to use Welch’s t-tes, which doesnt assume equal variances for safety
+            _, p_ttest = ttest_ind(within, between, equal_var=False)
 
             # Non-parametric test
-            u_stat, p_value_non_parametric = mannwhitneyu(within_graph_scores, between_graph_scores)
+            # alternative='two-sided' because we don’t want to assume direction in advance
+            # (we're expecting within-piece similarity to be higher)
+            u_stat, p_value_non_parametric = mannwhitneyu(within, between, alternative='two-sided')
+
+            # Effect sizes
+
+            # Cohen's d
+            n1, n2 = len(within), len(between)
+            pooled_sd = np.sqrt(((n1 - 1) * np.var(within, ddof=1) +
+                                 (n2 - 1) * np.var(between, ddof=1)) / (n1 + n2 - 2))
+            cohens_d = (avg_within - avg_between) / pooled_sd
+
+            # AUC (common‑language effect size)
+            auc = u_stat / (n1 * n2)
 
             # Store the results
-            result = [k, p_value_within, p_value_between, avg_within, avg_between, p_value, p_value_non_parametric]
+            result = [k, p_norm_within, p_norm_between,
+                      avg_within, avg_between,
+                      p_ttest, p_value_non_parametric,
+                      cohens_d, auc]
             graph_statistics.loc[idx] = result
 
             # Cache the results
@@ -217,6 +254,11 @@ class KNNGraphTuner:
 
             # Save results after each k value
             self.save_progress()
+
+        for col in ['parametric_p', 'non_parametric_p']:
+            pvals = graph_statistics[col].values
+            _, pvals_adj, _, _ = multipletests(pvals, method='fdr_bh')
+            graph_statistics[f'{col}_adj'] = pvals_adj
 
         return graph_statistics
 
@@ -345,93 +387,81 @@ class KNNGraphTuner:
 
 def compare_kernels(batcher_output_dir='./batcher_output', min_k=1, max_k=10, k_step=1):
     """
-    Compare multiple graph kernels using the same dataset.
+    Benchmark several graph‑kernel families on the **same** music dataset,
+    plotting FDR‑corrected p‑values (and saving the raw DataFrames).
 
-    Args:
-        batcher_output_dir (str): Path to the GraphBatcher output directory
-        min_k (int): Minimum k value to test
-        max_k (int): Maximum k value to test
-        k_step (int): Step size for k values
-
-    Returns:
-        dict: Dictionary mapping kernel names to their results DataFrames
+    Returns
+    -------
+    dict
+        Maps kernel‑name → results DataFrame (columns include *parametric_p,
+        parametric_p_adj, non_parametric_p, non_parametric_p_adj, cohens_d, auc*).
     """
-    # Define kernels to test
+    # ── 1. Kernels to evaluate ────────────────────────────────────────────────
     kernels = {
         'WeisfeilerLehman': gk.WeisfeilerLehman(normalize=True),
-        # 'PyramidMatch': gk.PyramidMatch(normalize=True),
         'ShortestPath': gk.ShortestPath(normalize=True),
         'GraphletSampling': gk.GraphletSampling(normalize=True),
         'RandomWalkLabeled': gk.RandomWalkLabeled(),
-        'WeisfeilerLehman (non-normalized)': gk.WeisfeilerLehman(normalize=False),
-        # 'PyramidMatch (non-normalized)': gk.PyramidMatch(normalize=False),
-        'ShortestPath (non-normalized)': gk.ShortestPath(normalize=False),
-        'GraphletSampling (non-normalized)': gk.GraphletSampling(normalize=False),
+        'WeisfeilerLehman (raw)': gk.WeisfeilerLehman(normalize=False),
+        'ShortestPath (raw)': gk.ShortestPath(normalize=False),
+        'GraphletSampling (raw)': gk.GraphletSampling(normalize=False),
     }
 
-    results = {}
-    figures = []
+    results, figs = {}, []
 
-    # Loop through each kernel
+    # ── 2. Loop over kernels ─────────────────────────────────────────────────
     for name, kernel in kernels.items():
-        print(f"\n\n{'=' * 50}")
-        print(f"Testing kernel: {name}")
-        print(f"{'=' * 50}\n")
+        print(f"\n{'=' * 60}\nTesting kernel: {name}\n{'=' * 60}\n")
 
-        # Create tuner with this kernel
         tuner = KNNGraphTuner(
             graph_kernel=kernel,
             batcher_output_dir=batcher_output_dir,
             min_k=min_k,
             max_k=max_k,
             k_step=k_step,
-            output_dir=f'./tuner_output_{name.lower()}'  # Separate output dir for each kernel
+            output_dir=f'./tuner_output_{name.lower().replace(" ", "_")}'
         )
 
-        # Run analysis
-        result_df = tuner.calculate_graph_statistics()
-        results[name] = result_df
+        df = tuner.calculate_graph_statistics()
+        results[name] = df  # keep for later
 
-        # Create figure without showing it yet
+        # ── Plot FDR‑corrected p‑values for this kernel ──────────────────────
         fig = plt.figure(figsize=(10, 6))
-        plt.plot(result_df['k'], result_df['parametric_p_value'], label='Parametric P-Value',
-                 marker='o', linestyle='-', color='blue')
-        plt.plot(result_df['k'], result_df['non_parametric_p_value'], label='Non-Parametric P-Value',
-                 marker='s', linestyle='--', color='orange')
-        plt.xlabel('k Values')
-        plt.ylabel('P-Values')
-        plt.title(f'P-Values vs. k ({name})')
-        plt.axhline(y=0.05, color='red', linestyle=':', label='Significance Threshold (p=0.05)')
-        plt.legend(loc='best')
-        plt.grid(True, linestyle='--', alpha=0.7)
+        plt.plot(df['k'], df['parametric_p_adj'], 'o-', label='Parametric p (FDR)', lw=1.8)
+        plt.plot(df['k'], df['non_parametric_p_adj'], 's--', label='Non-param p (FDR)', lw=1.8)
+        plt.axhline(0.05, ls=':', color='red', label='α = 0.05')
+        plt.xlabel('k (neighbours)')
+        plt.ylabel('FDR-corrected p-value')
+        plt.title(f'FDR-corrected p-values vs k — {name}')
+        plt.grid(ls='--', alpha=0.6)
+        plt.legend()
+        plt.tight_layout()
+        fig.savefig(f'./tuner_output_{name.lower().replace(" ", "_")}/p_values_vs_k.png')
+        figs.append(fig)
 
-        # Save figure
-        plt.savefig(f'./tuner_output_{name.lower()}/p_values_vs_k.png')
-        figures.append(fig)
+    # ── 3. Summary plot: raw vs. adjusted parametric p‑values ──────────────────
+    plt.figure(figsize=(12, 7))
 
-    # Create a summary plot comparing all kernels
-    plt.figure(figsize=(12, 8))
-    for name, result_df in results.items():
-        plt.plot(result_df['k'], result_df['parametric_p_value'], marker='o', linestyle='-',
-                 label=f'{name} (Parametric)')
+    for name, df in results.items():
+        # Solid line: FDR-adjusted
+        plt.plot(df['k'], df['parametric_p_adj'], marker='o', lw=1.8, label=f'{name} (adj)')
+        # Dashed line: raw
+        plt.plot(df['k'], df['parametric_p'], marker='x', lw=1.2, ls='--', label=f'{name} (raw)')
 
-    plt.xlabel('k Values')
-    plt.ylabel('P-Values')
-    plt.title('Parametric P-Values Comparison Across Kernels')
-    plt.axhline(y=0.05, color='red', linestyle=':', label='Significance Threshold (p=0.05)')
-    plt.legend(loc='best')
-    plt.grid(True, linestyle='--', alpha=0.7)
-    plt.savefig('./tuner_output_summary/kernel_comparison.png')
+    plt.axhline(0.05, ls=':', color='red', label='α = 0.05')
+    plt.xlabel('k (neighbours)')
+    plt.ylabel('Parametric p‑value')
+    plt.title('Kernel comparison: raw vs. FDR‑adjusted parametric p‑values')
+    plt.grid(ls='--', alpha=.6)
+    plt.legend(bbox_to_anchor=(1.05, 1), loc='upper left', fontsize='small')
+    os.makedirs('./tuner_output_summary', exist_ok=True)
+    plt.tight_layout()
+    plt.savefig('./tuner_output_summary/kernel_comparison_raw_vs_adj.png')
 
-    # Display all figures
-    for fig in figures:
-        plt.figure(fig.number)
-        plt.show()
-
-    # Show the summary plot
-    plt.show()
+    # ── 4. Show individual figures (optional) ────────────────────────────────
+    for fig in figs:
+        fig.show()
 
     return results
-
 
 
