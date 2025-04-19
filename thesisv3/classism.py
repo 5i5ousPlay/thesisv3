@@ -301,6 +301,42 @@ class GraphBatcher:
                 print(traceback.format_exc())
                 continue
 
+    def build_graphs(self):
+        """
+        Build graphs for processed files using pre-loaded segment and distance matrix data.
+        """
+        # Initialize the graph containers
+        self.graphs = []
+        self.graph_dict = {}
+
+        # Process each file we've already analyzed
+        for file in self.processed_files:
+            print(f"Building graph for {file}")
+            try:
+                # Get the distance matrix and segments from dictionaries
+                distance_matrix = self.distmat_dict[file]
+                segments = self.segment_dict[file]
+
+                # Create a graph builder
+                builder = GraphBuilder(self.k, distance_matrix, segments)
+
+                # Construct the graph
+                graph = builder.construct_graph()
+
+                # Add to list and dictionary
+                self.graphs.append(graph)
+                self.graph_dict[file] = graph
+
+                # Save progress after each file
+                self.save_progress()
+
+            except Exception as e:
+                print(f"Error building graph for: {file}. Skipping file")
+                print(traceback.format_exc())
+                continue
+
+        print(f"Completed building graphs for {len(self.graph_dict)} files")
+
     def save_progress(self):
         """Save each variable to its own pickle file, overwriting previous versions."""
 
@@ -342,7 +378,8 @@ class GraphBatcher:
 
         # Rebuild the lists from the dictionaries
         if self.processed_files:
-            self.graphs = [self.graph_dict[f] for f in self.processed_files]
+            if self.graph_dict:
+                self.graphs = [self.graph_dict[f] for f in self.processed_files]
             self.segments = [self.segment_dict[f] for f in self.processed_files]
             self.distance_matrices = [self.distmat_dict[f] for f in self.processed_files]
 
