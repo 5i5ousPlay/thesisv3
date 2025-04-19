@@ -1411,3 +1411,20 @@ def encode_note_expectancy_score(p1, p2, p3, mode='5-factor') -> float:
         return np.dot(vec, BETA_2)
     else:
         raise ValueError("Provided mode does not exist. Only modes are '5-factor' and '2-factor'")
+
+
+def segment_expectancy(segment_exp: pd.Series, mode='mean'):
+    """
+    Calculates the aggregated expectancy of a segment.
+
+    :param segment_exp (pd.Series): expectancy scores of notes in a segment
+    :param mode (str): specifies the mode for calculating segment expectancy
+    :return: aggregated expectancy of segment
+    """
+    if mode == 'mean':
+        return segment_exp.mean()
+    elif mode == 'surprisal':
+        p = np.exp(segment_exp) / np.exp(segment_exp).sum()
+        return -(np.log(p).mean())
+    else:
+        raise ValueError("Mode does not exist. Specify either 'mean' or 'surprisal' only")
