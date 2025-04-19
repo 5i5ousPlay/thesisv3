@@ -88,6 +88,32 @@ def segments_to_distance_matrices(segments: dict, pickle_dir=None, pickle_file=N
 # Graph Construction & Visualization
 # ===============================
 
+def construct_graph(k: int, distance_matrix: np.ndarray) -> nx.Graph:
+    knn_graph = kneighbors_graph(distance_matrix, n_neighbors=k, mode='connectivity')
+    G = nx.from_scipy_sparse_array(knn_graph)
+
+    # Optional: Add labels from segments if needed
+    # for i in range(len(segments)):
+    #     G.nodes[i]['label'] = np.round(segments[i]['expectancy'].mean(), decimals=2)
+    #     G.nodes[i]['label'] = i
+
+    if not nx.is_connected(G):
+        print("The KNN graph is disjoint. Ensuring connectivity...")
+        components = list(nx.connected_components(G))
+
+        for i in range(len(components) - 1):
+            min_dist = np.inf
+            closest_pair = None
+            for node1 in components[i]:
+                for node2 in components[i + 1]:
+                    dist = distance_matrix[node1, node2]
+                    if dist < min_dist:
+                        min_dist = dist
+                        closest_pair = (node1, node2)
+            G.add_edge(*closest_pair)
+
+    return G
+
 def distance_matrix_to_knn_graph(k: int, distance_matrix: np.array, graph_title: str,
                                  seed: int, iterations: int, force_connect=False, show_labels=False):
     """
