@@ -181,9 +181,9 @@ class KNNGraphTuner:
         graph_statistics = self.calculate_graph_statistics()
         plt.figure(figsize=(10, 6))
 
-        plt.plot(graph_statistics['k'], graph_statistics['parametric_p_value'], label='Parametric P-Value',
+        plt.plot(graph_statistics['k'], graph_statistics['parametric_p'], label='Parametric P-Value',
                  marker='o', linestyle='-', color='blue')
-        plt.plot(graph_statistics['k'], graph_statistics['non_parametric_p_value'], label='Non-Parametric P-Value',
+        plt.plot(graph_statistics['k'], graph_statistics['non_parametric_p'], label='Non-Parametric P-Value',
                  marker='s', linestyle='--', color='orange')
 
         plt.xlabel('k Values')
@@ -245,7 +245,7 @@ class KNNGraphTuner:
                   f"{len(self.results)} k values already calculated")
 
 
-def compare_kernels(batcher_output_dir='./Output/batcher_output', min_k=2, max_k=10, k_step=1):
+def compare_kernels(batcher_dir='./Output/batcher_output', output_dir='./Output/tuner_output', min_k=2, max_k=10, k_step=1):
     """
     Benchmark several graph‑kernel families on the **same** music dataset,
     plotting FDR‑corrected p‑values (and saving the raw DataFrames).
@@ -258,13 +258,20 @@ def compare_kernels(batcher_output_dir='./Output/batcher_output', min_k=2, max_k
     """
     # ── 1. Kernels to evaluate ────────────────────────────────────────────────
     kernels = {
+        # Weisfeiler-Lehman doesn't use edge weights, but we keep both normalized and raw versions
         'WeisfeilerLehman': gk.WeisfeilerLehman(n_iter=5, normalize=True),
-        'ShortestPath': gk.ShortestPath(normalize=True),
-        # 'GraphletSampling': gk.GraphletSampling(normalize=True),
-        'RandomWalkLabeled': gk.RandomWalkLabeled(),
-        'WeisfeilerLehman (raw)': gk.WeisfeilerLehman(normalize=False),
-        'ShortestPath (raw)': gk.ShortestPath(normalize=False),
-        'GraphletSampling (raw)': gk.GraphletSampling(normalize=False),
+        'WeisfeilerLehman (raw)': gk.WeisfeilerLehman(n_iter=5, normalize=False),
+
+        # Shortest Path
+        'ShortestPath': gk.ShortestPath(normalize=True, with_labels=True),
+        'ShortestPath (Attr)': gk.ShortestPath(normalize=True),
+
+        # Random Walk — edge weights are implicitly used via transition probabilities
+        # 'RandomWalkLabeled (default)': gk.RandomWalkLabeled(lamda=0.1, method_type='fast', kernel_type='geometric'),
+
+        # # GraphletSampling does not use edge weights — we keep it for completeness
+        # 'GraphletSampling (norm)': gk.GraphletSampling(normalize=True),
+        # 'GraphletSampling (raw)': gk.GraphletSampling(normalize=False),
     }
 
     results, figs = {}, []
@@ -275,11 +282,11 @@ def compare_kernels(batcher_output_dir='./Output/batcher_output', min_k=2, max_k
 
         tuner = KNNGraphTuner(
             graph_kernel=kernel,
-            batcher_dir=batcher_output_dir,
+            batcher_dir=batcher_dir,
             min_k=min_k,
             max_k=max_k,
             k_step=k_step,
-            output_dir=f'./tuner_output_{name.lower().replace(" ", "_")}'
+            output_dir=os.path.join(output_dir, name.lower().replace(" ", "_"))
         )
 
         df = tuner.calculate_graph_statistics()
@@ -289,6 +296,8 @@ def compare_kernels(batcher_output_dir='./Output/batcher_output', min_k=2, max_k
         fig = plt.figure(figsize=(10, 6))
         plt.plot(df['k'], df['parametric_p_adj'], 'o-', label='Parametric p (FDR)', lw=1.8)
         plt.plot(df['k'], df['non_parametric_p_adj'], 's--', label='Non-param p (FDR)', lw=1.8)
+        plt.plot(df['k'], df['parametric_p'], 'o-', label='Parametric p', lw=1.8)
+        plt.plot(df['k'], df['non_parametric_p'], 's--', label='Non-param p', lw=1.8)
         plt.axhline(0.05, ls=':', color='red', label='α = 0.05')
         plt.xlabel('k (neighbours)')
         plt.ylabel('FDR-corrected p-value')
@@ -296,7 +305,7 @@ def compare_kernels(batcher_output_dir='./Output/batcher_output', min_k=2, max_k
         plt.grid(ls='--', alpha=0.6)
         plt.legend()
         plt.tight_layout()
-        fig.savefig(f'./tuner_output_{name.lower().replace(" ", "_")}/p_values_vs_k.png')
+        fig.savefig(os.path.join(output_dir, name.lower().replace(" ", "_"), 'p_values_vs_k.png'))
         figs.append(fig)
 
     # ── 3. Summary plot: raw vs. adjusted parametric p‑values ──────────────────
@@ -314,9 +323,9 @@ def compare_kernels(batcher_output_dir='./Output/batcher_output', min_k=2, max_k
     plt.title('Kernel comparison: raw vs. FDR‑adjusted parametric p‑values')
     plt.grid(ls='--', alpha=.6)
     plt.legend(bbox_to_anchor=(1.05, 1), loc='upper left', fontsize='small')
-    os.makedirs('./tuner_output_summary', exist_ok=True)
+    os.makedirs(os.path.join(output_dir, 'summary'), exist_ok=True)
     plt.tight_layout()
-    plt.savefig('./tuner_output_summary/kernel_comparison_raw_vs_adj.png')
+    plt.savefig(os.path.join(output_dir, 'summary', 'kernel_comparison_raw_vs_adj.png'))
 
     # ── 4. Show individual figures (optional) ────────────────────────────────
     for fig in figs:
