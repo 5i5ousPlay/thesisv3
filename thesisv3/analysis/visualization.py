@@ -20,6 +20,7 @@ import matplotlib.pyplot as plt
 import matplotlib.patches as mpatches
 from matplotlib.colors import ListedColormap
 import seaborn as sns
+from thesisv3.utils.helpers import get_piece_type
 
 
 def visualize_segment(segments, segment_index, original_score, show_score=True):
@@ -869,53 +870,6 @@ def visualize_notes_with_symbols_flatten(notes_with_symbols, original_score, all
     return new_score
 
 
-import numpy as np
-import matplotlib.pyplot as plt
-import matplotlib.patches as mpatches
-from matplotlib.colors import ListedColormap
-import seaborn as sns
-
-
-def get_piece_type(piece_name):
-    """
-    Extract and categorize the type of a musical piece from its name.
-
-    Parameters:
-    -----------
-    piece_name : str
-        String in format "composer | piece name"
-
-    Returns:
-    --------
-    str
-        Categorized piece type
-    """
-    parts = piece_name.split('|')
-    if len(parts) > 1:
-        piece_part = parts[1].strip()
-
-        # Special handling for Chopin's Études
-        if 'Étude' in piece_part:
-            if 'Op. 10' in piece_part:
-                return "Chopin's Études Op. 10"
-            elif 'Op. 25' in piece_part:
-                return "Chopin's Études Op. 25"
-            else:
-                return 'Études (General)'
-        elif 'Waltz' in piece_part:
-            return "Chopin's Waltzes"
-        elif 'Sonata' in piece_part:
-            return "Ysaÿe's Violin Sonatas"
-        elif 'Suite' in piece_part:
-            return "Bach's Cello Suites"
-        elif 'Ballade' in piece_part:
-            return "Chopin's Ballades"
-        else:
-            # Default to first word
-            return piece_part.split(' ')[0]
-    return 'Unknown'
-
-
 def visualize_mds(coordinates, segment_metadata, color_by='composer', figsize=(14, 12),
                   save_path=None, show=True):
     """
@@ -1116,3 +1070,348 @@ def visualize_mds_interactive(coordinates, segment_metadata, color_by='composer'
     except ImportError:
         print("Plotly not installed. Skipping interactive visualization.")
         return None
+
+
+# ===============================
+# Heatmap Visualizations
+# ===============================
+
+
+def plot_similarity_matrix_heatmap(df_filtered, figsize=(30, 25), cmap="Blues", save_path=None):
+    """
+    Creates a heatmap of the upper triangle of the similarity matrix.
+
+    Parameters:
+    -----------
+    df_filtered : pd.DataFrame
+        DataFrame with columns 'Piece_1', 'Piece_2', 'Between_Similarity'
+    figsize : tuple, optional
+        Figure size (width, height)
+    cmap : str, optional
+        Colormap for the heatmap
+    save_path : str, optional
+        Path to save the figure
+
+    Returns:
+    --------
+    similarity_matrix : pd.DataFrame
+        Pivot table of the similarity matrix
+    """
+    # Create pivot table
+    similarity_matrix = df_filtered.pivot_table(
+        index='Piece_1',
+        columns='Piece_2',
+        values='Between_Similarity'
+    )
+
+    # Create mask for upper triangle
+    mask = np.triu(np.ones_like(similarity_matrix, dtype=bool))
+    np.fill_diagonal(mask, False)
+
+    # Create heatmap
+    plt.figure(figsize=figsize)
+    sns.heatmap(
+        similarity_matrix.iloc[::-1],
+        cmap=cmap,
+        annot=True,
+        cbar=True,
+        fmt=".2f",
+        vmin=0,
+        mask=mask[::-1]
+    )
+
+    # Configure and show plot
+    plt.title("Heatmap of Between Pieces Similarity")
+    plt.tight_layout()
+
+    if save_path:
+        plt.savefig(save_path, dpi=300, bbox_inches='tight')
+
+    plt.show()
+
+    return similarity_matrix
+
+
+def analyze_similarity_statistics(similarity_matrix, top_n=10):
+    """
+    Analyzes the similarity matrix to find median, top N, and bottom N similarities.
+
+    Parameters:
+    -----------
+    similarity_matrix : pd.DataFrame
+        Square matrix of similarities
+    top_n : int, optional
+        Number of top and bottom similarities to show
+
+    Returns:
+    --------
+    dict
+        Dictionary containing statistics and top/bottom similarities
+    """
+    # Get upper triangle values
+    upper_triangle = similarity_matrix.where(
+        np.triu(np.ones_like(similarity_matrix), k=1).astype(bool)
+    )
+
+    # Reshape to get all values in a Series
+    similarities = upper_triangle.stack().reset_index()
+    similarities.columns = ['Piece_1', 'Piece_2', 'Similarity']
+
+    # Calculate median similarity
+    median_similarity = similarities['Similarity'].median()
+    print(f"Median Similarity: {median_similarity:.4f}")
+
+    # Get top N highest similarities
+    top_n_highest = similarities.nlargest(top_n, 'Similarity')
+    print(f"\nTop {top_n} Highest Similarities:")
+    for i, (idx, row) in enumerate(top_n_highest.iterrows(), 1):
+        print(f"{i}. {row['Piece_1']} - {row['Piece_2']}: {row['Similarity']:.4f}")
+
+    # Get bottom N lowest similarities
+    bottom_n_lowest = similarities.nsmallest(top_n, 'Similarity')
+    print(f"\nBottom {top_n} Lowest Similarities:")
+    for i, (idx, row) in enumerate(bottom_n_lowest.iterrows(), 1):
+        print(f"{i}. {row['Piece_1']} - {row['Piece_2']}: {row['Similarity']:.4f}")
+
+    # Return statistics as dictionary
+    return {
+        'median': median_similarity,
+        'top_similarities': top_n_highest,
+        'bottom_similarities': bottom_n_lowest
+    }
+
+
+def plot_piece_type_similarity(similarity_matrix,
+                               excluded_pieces=None, figsize=(14, 12),
+                               cmap="Blues", save_path=None):
+    """
+    Creates a heatmap showing average similarities between piece types.
+
+    Parameters:
+    -----------
+    similarity_matrix : pd.DataFrame
+        Square matrix of similarities
+    get_piece_type_func : function
+        Function that takes a piece name and returns its type
+    excluded_pieces : list, optional
+        List of piece names to exclude from analysis
+    figsize : tuple, optional
+        Figure size (width, height)
+    cmap : str, optional
+        Colormap for the heatmap
+    save_path : str, optional
+        Path to save the figure
+
+    Returns:
+    --------
+    avg_df : pd.DataFrame
+        Average similarity matrix by piece type
+    """
+    df = similarity_matrix.copy()
+
+    # Set default excluded pieces if None
+    if excluded_pieces is None:
+        excluded_pieces = []
+
+    # Create a dictionary to map pieces to their types
+    piece_to_type = {}
+
+    # Map pieces to types
+    for piece in df.index:
+        if piece not in excluded_pieces:
+            piece_to_type[piece] = get_piece_type(piece)
+
+    for piece in df.columns:
+        if piece not in excluded_pieces:
+            piece_to_type[piece] = get_piece_type(piece)
+
+    # Get unique piece types
+    piece_types = sorted(set(piece_to_type.values()))
+
+    # Create matrices to store sums and counts
+    similarity_sum = {t1: {t2: 0 for t2 in piece_types} for t1 in piece_types}
+    similarity_count = {t1: {t2: 0 for t2 in piece_types} for t1 in piece_types}
+
+    # Calculate sums and counts
+    for row_piece in df.index:
+        if row_piece in excluded_pieces:
+            continue
+        row_type = piece_to_type[row_piece]
+        for col_piece in df.columns:
+            if col_piece in excluded_pieces:
+                continue
+            col_type = piece_to_type[col_piece]
+            similarity = df.loc[row_piece, col_piece]
+            if pd.notna(similarity):
+                similarity_sum[row_type][col_type] += similarity
+                similarity_count[row_type][col_type] += 1
+
+    # Calculate averages
+    avg_similarity = {
+        t1: {
+            t2: (similarity_sum[t1][t2] / similarity_count[t1][t2]
+                 if similarity_count[t1][t2] > 0 else 0)
+            for t2 in piece_types
+        }
+        for t1 in piece_types
+    }
+
+    # Convert to pandas DataFrame for easier visualization
+    avg_df = pd.DataFrame(avg_similarity)
+
+    # Create the heatmap
+    plt.figure(figsize=figsize)
+    plt.rcParams.update({'font.size': 14})
+    ax = sns.heatmap(
+        avg_df,
+        annot=True,
+        cmap=cmap,
+        fmt=".3f",
+        linewidths=0.5,
+        cbar_kws={"shrink": 0.8},
+        annot_kws={"size": 16}
+    )
+
+    # Adjust axis labels font size
+    plt.xticks(fontsize=16, rotation=45, ha='right')
+    plt.yticks(fontsize=16, rotation=45, ha='right')
+
+    # Make colorbar ticks larger
+    cbar = ax.collections[0].colorbar
+    cbar.ax.tick_params(labelsize=14)
+
+    plt.tight_layout()
+
+    if save_path:
+        plt.savefig(save_path, dpi=300, bbox_inches='tight')
+
+    plt.show()
+
+    # Print the average similarity matrix for reference
+    print("Average Similarity Matrix:")
+    print(avg_df.round(3))
+
+    return avg_df
+
+
+def plot_sorted_similarity_heatmap(similarity_matrix,
+                                   figsize=(16, 14), cmap="Blues",
+                                   save_path=None):
+    """
+    Creates a sorted heatmap with divider lines between different piece types.
+
+    Parameters:
+    -----------
+    similarity_matrix : pd.DataFrame
+        Square matrix of similarities
+    get_piece_type_func : function
+        Function that takes a piece name and returns its type
+    figsize : tuple, optional
+        Figure size (width, height)
+    cmap : str, optional
+        Colormap for the heatmap
+    save_path : str, optional
+        Path to save the figure
+    """
+    # Sort the matrix by piece type
+    piece_types = [get_piece_type(piece) for piece in similarity_matrix.index]
+    sorted_indices = sorted(range(len(piece_types)),
+                            key=lambda i: (piece_types[i], similarity_matrix.index[i]))
+    sorted_pieces = [similarity_matrix.index[i] for i in sorted_indices]
+
+    # Reindex the matrix with the sorted pieces
+    sorted_matrix = similarity_matrix.reindex(index=sorted_pieces, columns=sorted_pieces)
+
+    # Create the heatmap
+    plt.figure(figsize=figsize)
+    ax = sns.heatmap(
+        sorted_matrix,
+        cmap=cmap,
+        annot=False,
+        fmt=".2f",
+        linewidths=0.5,
+        cbar_kws={
+            "shrink": 0.8,
+            "label": "Similarity Score",
+        }
+    )
+
+    # Remove title and axis labels
+    plt.xticks([])
+    plt.yticks([])
+    plt.title("")
+
+    # Add divider lines between piece types
+    prev_type = None
+    for i, piece in enumerate(sorted_matrix.index):
+        current_type = get_piece_type(piece)
+        if current_type != prev_type and i > 0:
+            plt.axhline(y=i, color='red', linewidth=2)
+            plt.axvline(x=i, color='red', linewidth=2)
+        prev_type = current_type
+
+    plt.tight_layout()
+
+    if save_path:
+        plt.savefig(save_path, dpi=300, bbox_inches='tight')
+
+    plt.show()
+
+    return sorted_matrix
+
+
+def analyze_similarity(df_filtered, excluded_pieces=None,
+                       top_n=10, output_dir="./Output/analysis"):
+    """
+    Complete analysis pipeline for similarity data.
+
+    Parameters:
+    -----------
+    df_filtered : pd.DataFrame
+        DataFrame with columns 'Piece_1', 'Piece_2', 'Between_Similarity'
+    get_piece_type_func : function
+        Function that takes a piece name and returns its type
+    excluded_pieces : list, optional
+        List of piece names to exclude from analysis
+    top_n : int, optional
+        Number of top and bottom similarities to show
+    output_dir : str, optional
+        Directory to save output figures
+
+    Returns:
+    --------
+    dict
+        Dictionary containing analysis results
+    """
+    import os
+    os.makedirs(output_dir, exist_ok=True)
+
+    # 1. Create and plot similarity matrix
+    similarity_matrix = plot_similarity_matrix_heatmap(
+        df_filtered,
+        save_path=os.path.join(output_dir, "similarity_heatmap.png")
+    )
+
+    # 2. Analyze similarity statistics
+    stats = analyze_similarity_statistics(similarity_matrix, top_n=top_n)
+
+    # 3. Create piece type similarity heatmap
+    avg_df = plot_piece_type_similarity(
+        similarity_matrix,
+        excluded_pieces=excluded_pieces,
+        save_path=os.path.join(output_dir, "piece_type_similarity.png")
+    )
+
+    # 4. Create sorted similarity heatmap with dividers
+    sorted_matrix = plot_sorted_similarity_heatmap(
+        similarity_matrix,
+        save_path=os.path.join(output_dir, "sorted_similarity_heatmap.png")
+    )
+
+    # Return all results
+    return {
+        'similarity_matrix': similarity_matrix,
+        'statistics': stats,
+        'piece_type_avg': avg_df,
+        'sorted_matrix': sorted_matrix
+    }
