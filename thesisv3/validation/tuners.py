@@ -358,12 +358,12 @@ def compare_kernels(batcher_dir='./Output/batcher_output', output_dir='./Output/
     kernels = {
         'WeisfeilerLehman': (
             WeisfeilerLehman,
-            {'n_iter': 5, 'normalize': True}
+            {'n_iter': 4, 'normalize': True}
         ),
-        # 'WeisfeilerLehman (raw)': (
-        #     WeisfeilerLehman,
-        #     {'n_iter': 5, 'normalize': False}
-        # ),
+        'WeisfeilerLehman (raw)': (
+            WeisfeilerLehman,
+            {'n_iter': 4, 'normalize': False}
+        ),
         'ShortestPath': (
             ShortestPath,
             {'normalize': True, 'with_labels': True}
@@ -511,3 +511,66 @@ def compare_kernels(batcher_dir='./Output/batcher_output', output_dir='./Output/
         fig.show()
 
     return results
+
+    # def _kernel_based_similarity(self, k: int, label: str = None):
+    #     # Load appropriate knn-graph dictionary
+    #     print(f"Calculating similarities for k={k} with label='{label}'...")
+    #     current_graphs = {}
+    #     # Always construct graphs needed for this specific call
+    #     print(f"Constructing graphs with k={k}, label='{label}'...")
+    #     try:
+    #         # Assuming self.distmat_dict and self.segment_dict are populated correctly
+    #         for piece_name, distmat in self.distmat_dict.items():
+    #             # Ensure segments exist for this piece
+    #             if piece_name not in self.segment_dict:
+    #                 print(f"Warning: Segments not found for piece '{piece_name}'. Skipping graph construction.")
+    #                 continue
+    #             # Check if distmat matches segment count (important!)
+    #             num_segments_expected = len(self.segment_dict[piece_name])
+    #             if distmat.shape[0] != num_segments_expected or distmat.shape[1] != num_segments_expected:
+    #                 print(f"Warning: Distance matrix shape {distmat.shape} mismatch for '{piece_name}' "
+    #                       f"with {num_segments_expected} segments. Skipping.")
+    #                 continue
+    #
+    #             # Ensure enough segments for k-NN
+    #             if num_segments_expected <= k:
+    #                 print(f"Warning: Piece '{piece_name}' has {num_segments_expected} segments, "
+    #                       f"which is <= k={k}. Skipping k-NN graph construction.")
+    #                 continue
+    #
+    #             # Pass the global_boundaries if needed by construct_graph/bin functions
+    #             current_graphs[piece_name] = construct_graph(
+    #                 k,
+    #                 distmat,
+    #                 self.segment_dict[piece_name],
+    #                 label=label,
+    #                 # global_boundaries=self.global_boundaries # Pass if needed
+    #             )
+    #     except Exception as e:
+    #         print(f"Error during graph construction for k={k}, label='{label}': {e}")
+    #         raise  # Re-raise the exception to halt if construction fails critically
+    #
+    #     if not current_graphs:
+    #         print(f"Warning: No graphs were constructed for k={k}, label='{label}'. Returning empty lists.")
+    #         return [], []
+    #
+    #     # Get a single DataFrame containing BOTH within‑ and between‑piece sims
+    #     pair_df = compare_within_and_between_pieces(
+    #         # Pass only distmats for pieces where graphs were successfully created
+    #         {name: self.distmat_dict[name] for name in current_graphs.keys()},
+    #         current_graphs,  # Pass the graphs constructed in this call
+    #         self.kernel_cls,
+    #         self.kernel_kwargs,
+    #         minimum_segments=11  # This filtering happens again inside, maybe filter earlier?
+    #     )
+    #
+    #     if pair_df.empty:
+    #         print(f"Warning: Comparison DataFrame is empty for k={k}, label='{label}'.")
+    #         return [], []
+    #
+    #     # Separate the two cases
+    #     within_mask = pair_df['Piece_1'] == pair_df['Piece_2']
+    #     within_scores = pair_df.loc[within_mask, 'Between_Similarity'].tolist()
+    #     between_scores = pair_df.loc[~within_mask, 'Between_Similarity'].tolist()
+    #
+    #     return within_scores, between_scores

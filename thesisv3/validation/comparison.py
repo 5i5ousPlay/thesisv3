@@ -73,7 +73,7 @@ def compare_within_and_between_pieces(
 
     # 2) Within‑piece sims
     for piece in tqdm_notebook(piece_names, desc="Within-piece", leave=False):
-        piece_display = piece[:20] + "..." if len(piece) > 20 else piece
+        # piece_display = piece[:20] + "..." if len(piece) > 20 else piece
 
         G = pieces_graph_dict[piece]
         if kernel_cls is ShortestPath:

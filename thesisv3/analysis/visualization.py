@@ -1134,19 +1134,20 @@ def plot_similarity_matrix_heatmap(df_filtered, figsize=(30, 25), cmap="Blues", 
 
 def analyze_similarity_statistics(similarity_matrix, top_n=10):
     """
-    Analyzes the similarity matrix to find median, top N, and bottom N similarities.
+    Analyzes the similarity matrix to find median, top N, and bottom N similarities,
+    and N similarities closest to the median.
 
     Parameters:
     -----------
     similarity_matrix : pd.DataFrame
         Square matrix of similarities
     top_n : int, optional
-        Number of top and bottom similarities to show
+        Number of top, bottom, and median-closest similarities to show
 
     Returns:
     --------
     dict
-        Dictionary containing statistics and top/bottom similarities
+        Dictionary containing statistics and top/bottom/median similarities
     """
     # Get upper triangle values
     upper_triangle = similarity_matrix.where(
@@ -1173,11 +1174,20 @@ def analyze_similarity_statistics(similarity_matrix, top_n=10):
     for i, (idx, row) in enumerate(bottom_n_lowest.iterrows(), 1):
         print(f"{i}. {row['Piece_1']} - {row['Piece_2']}: {row['Similarity']:.4f}")
 
+    # Get N similarities closest to the median
+    similarities['Distance_From_Median'] = abs(similarities['Similarity'] - median_similarity)
+    median_closest = similarities.nsmallest(top_n, 'Distance_From_Median')
+    print(f"\n{top_n} Similarities Closest to Median:")
+    for i, (idx, row) in enumerate(median_closest.iterrows(), 1):
+        print(
+            f"{i}. {row['Piece_1']} - {row['Piece_2']}: {row['Similarity']:.4f} (Distance: {row['Distance_From_Median']:.4f})")
+
     # Return statistics as dictionary
     return {
         'median': median_similarity,
         'top_similarities': top_n_highest,
-        'bottom_similarities': bottom_n_lowest
+        'bottom_similarities': bottom_n_lowest,
+        'median_similarities': median_closest
     }
 
 

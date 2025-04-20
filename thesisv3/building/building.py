@@ -87,10 +87,10 @@ def segments_to_distance_matrices(segments: dict, pickle_dir=None, pickle_file=N
 length_cuts = [8, 14]
 density_cuts = [2.0, 4.0]
 diversity_cuts = [4, 5]
-expect_cuts = [0.3580, 0.4980, 0.5639, 0.6200]
+# expect_cuts = [0.3580, 0.4980, 0.5639, 0.6200]
 
 
-# expect_cuts = [0.36, 0.61, 0.67, 0.77]
+expect_cuts = [0.36, 0.61, 0.67, 0.77]
 
 def bin_length(n_notes):
     if n_notes <= length_cuts[0]:
@@ -173,7 +173,7 @@ def construct_graph(k: int, distance_matrix: np.ndarray, segments: list[pd.DataF
                 u, v,
                 dist=d,
                 weight=np.exp(-(d ** 2) / (2 * sigma ** 2)),
-                inv_weight=1 / (np.exp(-(d ** 2) / (2 * sigma ** 2)) + 1e-5)
+                inv_weight=1 / (np.exp(-(d ** 2) / (2 * sigma ** 2)))
             )
     label_types = label.split('|') if '|' in label else [label]
 
@@ -185,7 +185,8 @@ def construct_graph(k: int, distance_matrix: np.ndarray, segments: list[pd.DataF
             len(seg) / max(seg['duration_beats'].sum(), 1e-6)  # Avoid division by zero
         ),
         'ir_pattern_diversity': lambda seg: bin_diversity(len(seg['ir_symbol'].unique())),
-        'x': lambda seg: 'x'  # Uniform label
+        'x': lambda seg: 'x',
+        'index': lambda seg, idx: str(idx)
     }
 
     for idx, seg in enumerate(segments):
@@ -196,7 +197,10 @@ def construct_graph(k: int, distance_matrix: np.ndarray, segments: list[pd.DataF
         node_features = {}
         for feature_name, calculator in feature_calculators.items():
             try:
-                node_features[feature_name] = calculator(seg)
+                if feature_name == 'index':
+                    node_features[feature_name] = calculator(seg, idx)
+                else:
+                    node_features[feature_name] = calculator(seg)
             except Exception as e:
                 print(f"Warning: Could not calculate feature '{feature_name}' for segment {idx}. Error: {e}")
                 node_features[feature_name] = "Error"  # Assign error label

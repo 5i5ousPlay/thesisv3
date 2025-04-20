@@ -108,15 +108,20 @@ def get_piece_type(piece_name):
     return 'Unknown'
 
 
-def concatenate_segments(segment_dict):
+def concatenate_segments(segment_dict, graph_dict=None):
     """
-    Process a dictionary of music segments and create a distance matrix with metadata.
+    Process a dictionary of music segments and create a distance matrix with metadata,
+    including node labels from the graph.
 
     Parameters:
     -----------
     segment_dict : dict
         Dictionary where keys are composer/piece strings in format "composer | piece name"
         and values are lists of dataframes representing segments
+
+    graph_dict : dict, optional
+        Dictionary where keys match segment_dict keys and values are the corresponding
+        networkx graphs with node labels
 
     Returns:
     --------
@@ -129,20 +134,42 @@ def concatenate_segments(segment_dict):
     # Create a consolidated list of all segments
     all_segments = []
     segment_metadata = []  # To track which composer and piece each segment belongs to
+    segment_indices = {}  # Keep track of global indices for each piece
 
     for composer_piece, df_list in segment_dict.items():
         # Extract composer and determine piece type
         composer = composer_piece.split('|')[0].strip() if '|' in composer_piece else composer_piece
         piece_type = get_piece_type(composer_piece)
 
-        for piece_idx, df in enumerate(df_list):
-            all_segments.append(df)
-            segment_metadata.append({
+        # If we have a graph for this piece, get the node labels
+        graph = graph_dict.get(composer_piece) if graph_dict else None
+
+        # Start tracking indices for this piece
+        segment_indices[composer_piece] = []
+
+        # for every segment (node) in a piece (one graph)
+        for segment_idx, df in enumerate(df_list):
+            # Store the global index for this segment
+
+            # Prepare metadata with optional node label
+            metadata = {
                 'composer': composer,
                 'piece_name': composer_piece,
                 'piece_type': piece_type,
-                'piece_idx': piece_idx
-            })
+                'segment_idx': segment_idx,
+            }
+
+            # Add node label if graph is available
+            if graph and segment_idx in graph.nodes:  # Use piece_idx instead
+                metadata['node_label'] = graph.nodes[segment_idx].get('label',
+                                                                    f"Node {segment_idx}")  # Use piece_idx here too
+                # Add other attributes using piece_idx for lookup
+                for attr_key, attr_value in graph.nodes[segment_idx].items():
+                    if attr_key != 'label':
+                        metadata[f'node_{attr_key}'] = attr_value
+
+            all_segments.append(df)
+            segment_metadata.append(metadata)
 
     # Generate distance matrix
     distance_matrix = segments_to_distance_matrix(all_segments)

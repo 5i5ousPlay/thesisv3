@@ -17,7 +17,7 @@ env['musescoreDirectPNGPath'] = 'C:\\Program Files\\MuseScore 4\\bin\\MuseScore4
 us = music21.environment.UserSettings()
 us['musescoreDirectPNGPath'] = 'C:/Program Files/MuseScore 4/bin/MuseScore4.exe'
 
-__all__ = ['MusicFileManager', 'MusicSegmentAnalyzer', 'MusicVisualizer']
+__all__ = ['MusicFileManager', 'MusicSegmentAnalyzer', 'MusicVisualizer', 'GraphBatcher']
 
 
 class MusicSegmentAnalyzer:
