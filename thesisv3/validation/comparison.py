@@ -7,25 +7,10 @@ import pandas as pd
 from grakel.kernels import LovaszTheta
 import networkx as nx
 from tqdm import tqdm
+from tqdm.notebook import tqdm as tqdm_notebook
 from grakel.utils import graph_from_networkx
-
-
-# def nx_to_grakel(G: nx.Graph) -> Graph:
-#     """
-#     Convert a (possibly weighted) NetworkX graph to a GraKeL Graph.
-#     Keeps:
-#       • edge attribute 'weight'  (falls back to 1.0)
-#       • dummy integer node labels if none exist
-#     """
-#     # edge list with weights  →  (u, v, w)
-#     edges = [(u, v, G[u][v].get("weight", 1.0)) for u, v in G.edges()]
-#
-#     # node labels: use existing 'label', else dummy ints
-#     labels = nx.get_node_attributes(G, "label")
-#     if not labels:
-#         labels = {n: i for i, n in enumerate(G.nodes())}
-#
-#     return Graph(edges, node_labels=labels, graph_format="all")
+from typing import Type, Optional
+from grakel.kernels import ShortestPath
 
 
 def nx_to_grakel(G: nx.Graph) -> Graph:
@@ -70,135 +55,63 @@ def compare_graphs_kernel(grakel_graphs: list, graph_kernel):
     return similarity_matrix
 
 
-def compare_within_and_between_pieces(pieces_dist_mat, pieces_graph_dict, kernel, minimum_segments=11):
+def compare_within_and_between_pieces(
+        pieces_dist_mat,
+        pieces_graph_dict,
+        kernel_cls: Type,
+        kernel_kwargs: Optional[dict] = None,
+        minimum_segments: int = 11
+) -> pd.DataFrame:
     """
-    Compares within-piece and between-piece similarity scores, labeling them accordingly.
-
-    Parameters:
-    - pieces_dist_mat (dict): A dictionary where keys are piece names and values are distance matrices.
-    - pieces_graph_dict (dict): A dictionary where keys are piece names and values are graphs.
-    - k (int): Number of neighbors for k-NN graph.
-
-    Returns:
-    - between_piece_df (pd.DataFrame): DataFrame with pairs of piece names and their between-piece similarity scores.
+    kernel_cls    : the GraKeL kernel _class_ you want to use (not an instance)
+    kernel_kwargs: dict of parameters to pass to kernel_cls()
     """
+    kernel_kwargs = dict(kernel_kwargs or {})
+
+    # 1) Filter out too-small pieces
+    piece_names = [p for p, dm in pieces_dist_mat.items() if len(dm) >= minimum_segments]
+
     between_piece_scores = []
-    edge_weight_tag = "inv_weight" if isinstance(kernel, ShortestPath) else "weight"
-    if isinstance(kernel, ShortestPath):
-        print(edge_weight_tag)
-    # Convert each piece's segments into graphs
-    # for piece, dist_mat in pieces_dist_mat.items():
-    for piece in tqdm(pieces_dist_mat.keys(), desc="Processing within-piece similarities"):
-        dist_mat = pieces_dist_mat[piece]
-        if len(dist_mat) < minimum_segments:
-            print(f"Skipping {piece}: insufficient segments ({len(dist_mat)})")
-            continue
+    within_sim = {}
 
-        partition1, partition2 = kernighan_lin_partition(pieces_graph_dict[piece], dist_mat, 42)
+    # 2) Within‑piece sims
+    for piece in tqdm_notebook(piece_names, desc="Within-piece", leave=False):
+        piece_display = piece[:20] + "..." if len(piece) > 20 else piece
 
-        # Compute WL kernel similarity for within-piece (same piece)
-        grakel_graphs = [nx_to_grakel(G) for G in [partition1, partition2]]
+        G = pieces_graph_dict[piece]
+        if kernel_cls is ShortestPath:
+            for u, v, data in G.edges(data=True):
+                # pop inv_weight if present; otherwise leave existing weight or default to 1
+                data['weight'] = data.pop('inv_weight', data.get('weight', 1))
 
-        # grakel_graphs = graph_from_networkx(
-        #     [partition1, partition2],
-        #     node_labels_tag="label",
-        #     edge_weight_tag=edge_weight_tag
-        # )
-        similarity_within = compare_graphs_kernel(grakel_graphs, kernel)[0, 1]
+        part1, part2 = kernighan_lin_partition(G, 42)
+        gk_parts = [nx_to_grakel(p) for p in (part1, part2)]
+
+        # instantiate a fresh kernel for each within‑piece call
+        k_inst = kernel_cls(**kernel_kwargs)
+        sim = k_inst.fit_transform(gk_parts)[0, 1]
+
+        within_sim[piece] = sim
         between_piece_scores.append({
-            'Piece_1': piece,
-            'Piece_2': piece,
-            'Between_Similarity': similarity_within
+            "Piece_1": piece,
+            "Piece_2": piece,
+            "Between_Similarity": sim
         })
 
-    # Compare between pieces
-    piece_names = list(pieces_dist_mat.keys())
-    total_comparisons = len(piece_names) * (len(piece_names) - 1)
-    with tqdm(total=total_comparisons, desc="Processing between-piece similarities") as pbar:
-        for i in range(len(piece_names)):
-            for j in range(len(piece_names)):
-                piece_1, piece_2 = piece_names[i], piece_names[j]
+    # 3) Full N×N between‑piece sims in one shot
+    full_graphs = [nx_to_grakel(pieces_graph_dict[p]) for p in piece_names]
+    k_full = kernel_cls(**kernel_kwargs)
+    K_full = k_full.fit_transform(full_graphs)
 
-                if piece_1 == piece_2:  # intra-graph similarity is already computed above, using partitions
-                    continue
+    # 4) Unpack the off‑diagonals
+    for i, p1 in enumerate(piece_names):
+        for j, p2 in enumerate(piece_names):
+            if i == j:
+                continue
+            between_piece_scores.append({
+                "Piece_1": p1,
+                "Piece_2": p2,
+                "Between_Similarity": K_full[i, j]
+            })
 
-                full_graph1 = pieces_graph_dict[piece_1]
-                full_graph2 = pieces_graph_dict[piece_2]
-
-                # Compute WL kernel similarity between graph_1 of piece1 and graph_1 of piece2
-                grakel_graphs = [nx_to_grakel(G) for G in [full_graph1, full_graph2]]
-                # grakel_graphs = graph_from_networkx(
-                #     [full_graph1, full_graph2],
-                #     node_labels_tag="label",
-                #     edge_weight_tag=edge_weight_tag
-                # )
-                similarity_between = compare_graphs_kernel(grakel_graphs, kernel)[0, 1]
-                between_piece_scores.append({
-                    'Piece_1': piece_1,
-                    'Piece_2': piece_2,
-                    'Between_Similarity': similarity_between
-                })
-                pbar.update(1)
-
-    # Convert lists of dictionaries to DataFrames for better labeling and analysis
-    # within_piece_df = pd.DataFrame(within_piece_scores)
-    between_piece_df = pd.DataFrame(between_piece_scores)
-
-    return between_piece_df
-
-
-def compare_within_and_between_pieces2(pieces_dist_mat,
-                                       pieces_graph_dict,
-                                       kernel,
-                                       minimum_segments=11):
-    """
-    Returns an N×N DataFrame (indexed and columned by piece name) where
-    - diag[p,p] = WL similarity of that piece's two partitions
-    - offdiag[p,q] = WL similarity between the full graphs of p and q
-    """
-    # Determine the appropriate edge weight tag for this kernel
-    edge_weight_tag = "inv_weight" if isinstance(kernel, ShortestPath) else "weight"
-
-    # 1) Filter out too‑small pieces
-    piece_names = [
-        p for p, dm in pieces_dist_mat.items()
-        if len(dm) >= minimum_segments
-    ]
-
-    # 2) Compute the "within‑piece" similarity for each piece
-    within_sim = {}
-    for piece in piece_names:
-        G = pieces_graph_dict[piece]
-        part1, part2 = kernighan_lin_partition(G, 42)
-        gk_parts = list(graph_from_networkx(
-            [part1, part2],
-            node_labels_tag="label",
-            edge_weight_tag=edge_weight_tag
-        ))
-        # fresh kernel for each call to avoid re‑use state
-        within_sim[piece] = compare_graphs_kernel(
-            gk_parts,
-            type(kernel)(**kernel.get_params())
-        )[0, 1]
-
-    # 3) Build a list of the full graphs, convert them all at once
-    full_graphs = [pieces_graph_dict[p] for p in piece_names]
-    gk_full = list(graph_from_networkx(
-        full_graphs,
-        node_labels_tag="label",
-        edge_weight_tag=edge_weight_tag
-    ))
-    # compute the full N×N WL‐kernel matrix in one shot
-    K_full = compare_graphs_kernel(
-        gk_full,
-        type(kernel)(**kernel.get_params())
-    )
-
-    # 4) Assemble into a square DataFrame and overwrite its diagonal
-    sim_df = pd.DataFrame(K_full,
-                          index=piece_names,
-                          columns=piece_names)
-    for p in piece_names:
-        sim_df.loc[p, p] = within_sim[p]
-
-    return sim_df
+    return pd.DataFrame(between_piece_scores)

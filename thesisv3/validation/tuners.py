@@ -1,17 +1,80 @@
 import os
 import pickle
-
+import sys
+from typing import Type, Optional
 import grakel
 import grakel as gk
+
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
+from grakel.kernels import (
+    WeisfeilerLehman,
+    ShortestPath,
+    VertexHistogram,
+    PyramidMatch,
+    RandomWalkLabeled,
+    # GraphletSampling,
+)
 from scipy.stats import shapiro
 from scipy.stats import ttest_ind, mannwhitneyu
 from statsmodels.stats.multitest import multipletests
-
+from tqdm import tqdm
+from tqdm.notebook import tqdm as tqdm_notebook
 from thesisv3.validation.comparison import compare_within_and_between_pieces
 from thesisv3.building.building import construct_graph
+
+import sys
+from contextlib import contextmanager
+from tqdm.notebook import tqdm as tqdm_notebook
+
+
+# Stream handler for redirecting prints to the progress bar
+class TqdmStreamHandler:
+    def __init__(self, progress_bar):
+        self.progress_bar = progress_bar
+        self.buffer = ""
+
+    def write(self, text):
+        self.buffer += text
+        if '\n' in self.buffer:
+            lines = self.buffer.split('\n')
+            self.buffer = lines.pop()
+            for line in lines:
+                if line.strip():  # Only update with non-empty lines
+                    self.progress_bar.set_description(line[:40] + "..." if len(line) > 40 else line)
+
+    def flush(self):
+        pass
+
+
+# Context manager to suppress inner tqdm
+@contextmanager
+def suppress_inner_tqdm():
+    """Temporarily replace tqdm with a no-op version"""
+    import tqdm as tqdm_module
+    original_tqdm = tqdm_module.tqdm
+
+    # Create a dummy tqdm that just returns the iterable
+    def dummy_tqdm(iterable, **kwargs):
+        return iterable
+
+    # Add required methods
+    dummy_tqdm.update = lambda *args, **kwargs: None
+    dummy_tqdm.close = lambda: None
+    dummy_tqdm.set_description = lambda *args, **kwargs: None
+
+    try:
+        # Replace tqdm in various places it might be imported
+        tqdm_module.tqdm = dummy_tqdm
+        if 'tqdm' in sys.modules:
+            sys.modules['tqdm'].tqdm = dummy_tqdm
+        yield
+    finally:
+        # Restore original tqdm
+        tqdm_module.tqdm = original_tqdm
+        if 'tqdm' in sys.modules:
+            sys.modules['tqdm'].tqdm = original_tqdm
 
 
 class KNNGraphTuner:
@@ -21,7 +84,8 @@ class KNNGraphTuner:
     """
 
     def __init__(self,
-                 graph_kernel: grakel.kernels.Kernel,
+                 kernel_cls: Type[grakel.kernels.Kernel],
+                 kernel_kwargs: Optional[dict] = None,
                  seed=42,
                  min_k=1,
                  max_k=10,
@@ -35,9 +99,9 @@ class KNNGraphTuner:
         directory to save progress and results batcher_output_dir (str, optional): path to the GraphBatcher output
         directory to use instead of processing files again
         """
-        self.distance_matrices = []
-        self.segments = []
-        self.graph_kernel = graph_kernel
+        self.kernel_cls = kernel_cls
+        self.kernel_kwargs = dict(kernel_kwargs or {})
+
         self.seed = seed
         self.min_k = min_k
         self.max_k = max_k
@@ -51,6 +115,8 @@ class KNNGraphTuner:
         self.distmat_dict = {}
         self.graph_dict = {}
         self.new_graph_dict = False
+        self.distance_matrices = []
+        self.segments = []
 
         # Create output directory if it doesn't exist
         self.output_dir = output_dir
@@ -82,37 +148,38 @@ class KNNGraphTuner:
             return default_value
 
         # Check if we need to initialize graphs
-        if not self.graph_dict:
-            # First time running - need to get graphs
-            if label:
-                # Case 1: Custom label provided - construct new graphs
-                print(f"Constructing graphs with custom label: {label}")
-                for composer, distmat in self.distmat_dict.items():
-                    self.graph_dict[composer] = construct_graph(k, distmat, self.segment_dict[composer], label=label)
-                self.new_graph_dict = True
-                self.label_used = label  # Remember which label we used
-            else:
-                # Case 2: No label - try to load from pickle
-                print(f"Loading pre-constructed graphs for k={k}")
-                graphs_path = os.path.join(self.batcher_dir, f'graphs_k{k}.pkl')
-                self.graph_dict = safe_load(graphs_path, {})
-                if not self.graph_dict:
-                    raise ValueError(f"No graphs found for k={k} and failed to load from {graphs_path}")
-                self.new_graph_dict = True
-                self.label_used = None
-        elif label != getattr(self, 'label_used', None):
-            # We have graphs but the label changed - reconstruct
-            print(f"Label changed from {getattr(self, 'label_used', None)} to {label}. Reconstructing graphs.")
-            self.graph_dict = {}
+        # Check if we need to construct new graphs based on label or k value
+        k_specific_graph_path = os.path.join(self.batcher_dir, f'graphs_k{k}.pkl')
+
+        if label:
+            # Case 1: Custom label provided - always construct new graphs
+            print(f"Constructing graphs with custom label: {label}")
             for composer, distmat in self.distmat_dict.items():
                 self.graph_dict[composer] = construct_graph(k, distmat, self.segment_dict[composer], label=label)
-            self.label_used = label
+            self.using_custom_label = True  # Track that we're using a custom label
         else:
-            # We already have the right graphs, just reuse them
-            print(f"Reusing existing graphs with label: {getattr(self, 'label_used', None)}")
+            # Case 2: No custom label - try to load from pickle if available
+            self.using_custom_label = False
+            if os.path.exists(k_specific_graph_path):
+                print(f"Loading pre-constructed graphs for k={k}")
+                self.graph_dict = safe_load(k_specific_graph_path, {})
+                if not self.graph_dict:
+                    print(f"Error loading graphs for k={k}")
+                    return None, None
+            else:
+                # No pickle found, construct default graphs
+                print(f"Constructing default graphs for k={k}")
+                for composer, distmat in self.distmat_dict.items():
+                    self.graph_dict[composer] = construct_graph(k, distmat, self.segment_dict[composer])
 
         # Get a single DataFrame containing BOTH within‑ and between‑piece sims
-        pair_df = compare_within_and_between_pieces(self.distmat_dict, self.graph_dict, self.graph_kernel, minimum_segments=11)
+        pair_df = compare_within_and_between_pieces(
+            self.distmat_dict,
+            self.graph_dict,
+            self.kernel_cls,
+            self.kernel_kwargs,
+            minimum_segments=11
+        )
 
         # Separate the two cases
         within_mask = pair_df['Piece_1'] == pair_df['Piece_2']
@@ -141,16 +208,23 @@ class KNNGraphTuner:
                 'cohens_d', 'auc']
         graph_statistics = pd.DataFrame(columns=cols)
 
+        # Create a progress bar for k values
+        k_values = list(range(self.min_k, self.max_k, self.k_step))
+        k_progress = tqdm_notebook(k_values, desc="Processing k values")
+
         # Check if we have cached results for any k values
-        for k in range(self.min_k, self.max_k, self.k_step):
+        for k in k_progress:
+            k_progress.set_description(f"Processing k = {k}")
+
             if k in self.results:
-                print(f"Using cached results for k = {k}")
+                k_progress.set_description(f"Using cached results for k = {k}")
                 graph_statistics.loc[len(graph_statistics)] = self.results[k]
                 continue
 
             idx = len(graph_statistics)
-            print(f"Calculating graph statistics at k = {k}")
-            within, between = self._kernel_based_similarity(k, label)
+            # print(f"Calculating graph statistics at k = {k}")
+            with suppress_inner_tqdm():
+                within, between = self._kernel_based_similarity(k, label)
 
             # Normality tests
             _, p_norm_within = shapiro(within)
@@ -217,7 +291,7 @@ class KNNGraphTuner:
 
         plt.xlabel('k Values')
         plt.ylabel('P-Values')
-        plt.title(f'P-Values vs. k ({self.graph_kernel.__class__.__name__})')
+        plt.title(f'P-Values vs. k ({self.kernel_cls.__name__})')
         plt.axhline(y=0.05, color='red', linestyle=':', label='Significance Threshold (p=0.05)')
         plt.legend(loc='best')
 
@@ -287,26 +361,40 @@ def compare_kernels(batcher_dir='./Output/batcher_output', output_dir='./Output/
     """
     # ── 1. Kernels to evaluate ────────────────────────────────────────────────
     kernels = {
-        # Weisfeiler-Lehman doesn't use edge weights, but we keep both normalized and raw versions
-        'WeisfeilerLehman': gk.WeisfeilerLehman(n_iter=5, normalize=True),
-        # 'WeisfeilerLehman (raw)': gk.WeisfeilerLehman(n_iter=5, normalize=False),
-
-        # Shortest Path
-        # 'ShortestPath': gk.ShortestPath(normalize=True, with_labels=True),
-        # 'ShortestPath (Attr)': gk.ShortestPath(normalize=True),
-
-
-        # "VertexHistogram": gk.VertexHistogram(normalize=True),
-        # "PyramidMatch": gk.PyramidMatch(normalize=True),
-        # "RandomWalkLabeled": gk.RandomWalkLabeled(lamda=0.1, method_type="fast", kernel_type="geometric")
-
-
-        # Random Walk — edge weights are implicitly used via transition probabilities
-        # 'RandomWalkLabeled (default)': gk.RandomWalkLabeled(lamda=0.1, method_type='fast', kernel_type='geometric'),
-
-        # # GraphletSampling does not use edge weights — we keep it for completeness
-        # 'GraphletSampling (norm)': gk.GraphletSampling(normalize=True),
-        # 'GraphletSampling (raw)': gk.GraphletSampling(normalize=False),
+        'WeisfeilerLehman': (
+            WeisfeilerLehman,
+            {'n_iter': 5, 'normalize': True}
+        ),
+        # 'WeisfeilerLehman (raw)': (
+        #     WeisfeilerLehman,
+        #     {'n_iter': 5, 'normalize': False}
+        # ),
+        'ShortestPath': (
+            ShortestPath,
+            {'normalize': True, 'with_labels': True}
+            # note: 'attribute': 'inv_weight' will be injected automatically in the tuner
+        ),
+        'VertexHistogram': (
+            VertexHistogram,
+            {'normalize': True}
+        ),
+        'PyramidMatch': (
+            PyramidMatch,
+            {'normalize': True}
+        ),
+        # 'RandomWalkLabeled': (
+        #     RandomWalkLabeled,
+        #     {'lamda': 0.1, 'method_type': 'fast', 'kernel_type': 'geometric'}
+        # ),
+        # if you later want GraphletSampling:
+        # 'GraphletSampling (norm)': (
+        #     GraphletSampling,
+        #     {'normalize': True}
+        # ),
+        # 'GraphletSampling (raw)': (
+        #     GraphletSampling,
+        #     {'normalize': False}
+        # ),
     }
 
     results, figs = {}, []
@@ -317,26 +405,38 @@ def compare_kernels(batcher_dir='./Output/batcher_output', output_dir='./Output/
         output_dir = f"{output_dir}_{label_dir}"
 
     # ── 2. Loop over kernels ─────────────────────────────────────────────────
-    for name, kernel in kernels.items():
-        print(f"\n{'=' * 60}\nTesting kernel: {name}\n{'=' * 60}\n")
+    main_progress = tqdm_notebook(kernels.items(), total=len(kernels))
+    results = {}
+    for name, (kernel_cls, kernel_kwargs) in main_progress:
+        main_progress.set_description(f"Processing: {name}")
+        # print(f"\n{'=' * 60}\nTesting kernel: {name}\n{'=' * 60}\n")
 
-        tuner = KNNGraphTuner(
-            graph_kernel=kernel,
-            batcher_dir=batcher_dir,
-            min_k=min_k,
-            max_k=max_k,
-            k_step=k_step,
-            output_dir=os.path.join(output_dir, name.lower().replace(" ", "_"))
-        )
+        original_stdout = sys.stdout
+        sys.stdout = TqdmStreamHandler(main_progress)
 
-        df = tuner.calculate_graph_statistics(label=label)
-        results[name] = df  # keep for later
+        try:
+            # Your code runs here, prints will update the progress bar
+            tuner = KNNGraphTuner(
+                kernel_cls=kernel_cls,
+                kernel_kwargs=kernel_kwargs,
+                batcher_dir=batcher_dir,
+                min_k=min_k,
+                max_k=max_k,
+                k_step=k_step,
+                output_dir=os.path.join(output_dir, name.lower().replace(" ", "_"))
+            )
+
+            df = tuner.calculate_graph_statistics(label=label)
+            results[name] = df
+        finally:
+            # Restore stdout
+            sys.stdout = original_stdout
 
         # ── Plot FDR‑corrected p‑values for this kernel ──────────────────────
         fig = plt.figure(figsize=(10, 6))
-        plt.plot(df['k'], df['parametric_p_adj'], 'o-', label='Parametric p (FDR)', lw=1.8)
+        plt.plot(df['k'], df['parametric_p_adj'], 'o-', label='Parametric p (FDR)', lw=1.8)      # make the _adj have similar color
         plt.plot(df['k'], df['non_parametric_p_adj'], 's--', label='Non-param p (FDR)', lw=1.8)
-        plt.plot(df['k'], df['parametric_p'], 'o-', label='Parametric p', lw=1.8)
+        plt.plot(df['k'], df['parametric_p'], 'o-', label='Parametric p', lw=1.8)   # make the not adj have similar color
         plt.plot(df['k'], df['non_parametric_p'], 's--', label='Non-param p', lw=1.8)
         plt.axhline(0.05, ls=':', color='red', label='α = 0.05')
         plt.xlabel('k (neighbours)')
@@ -347,6 +447,50 @@ def compare_kernels(batcher_dir='./Output/batcher_output', output_dir='./Output/
         plt.tight_layout()
         fig.savefig(os.path.join(output_dir, name.lower().replace(" ", "_"), 'p_values_vs_k.png'))
         figs.append(fig)
+
+        # # Create a more readable multi-panel figure
+        # fig, axes = plt.subplots(2, 2, figsize=(15, 12), sharex=True)
+        # axes = axes.flatten()
+        #
+        # # Define a consistent color palette for all kernels
+        #
+        # cmap = plt.get_cmap('tab10')
+        # colors = cmap(np.linspace(0, 1, len(kernels)))
+        # kernel_colors = dict(zip(kernels.keys(), colors))
+        #
+        # # Plot 1: Parametric p-values (adjusted)
+        # for i, (name, df) in enumerate(results.items()):
+        #     axes[0].plot(df['k'], df['parametric_p_adj'], 'o-',
+        #                  color=kernel_colors[name], label=name, lw=2)
+        # axes[0].set_title('FDR-adjusted parametric p-values')
+        # axes[0].axhline(0.05, ls=':', color='red')
+        # axes[0].set_ylabel('p-value')
+        #
+        # # Plot 2: Non-parametric p-values (adjusted)
+        # for name, df in results.items():
+        #     axes[1].plot(df['k'], df['non_parametric_p_adj'], 's-',
+        #                  color=kernel_colors[name], lw=2)
+        # axes[1].set_title('FDR-adjusted non-parametric p-values')
+        # axes[1].axhline(0.05, ls=':', color='red')
+        #
+        # # Plot 3: Effect sizes
+        # for name, df in results.items():
+        #     axes[2].plot(df['k'], df['cohens_d'], 'D-',
+        #                  color=kernel_colors[name], lw=2)
+        # axes[2].set_title("Cohen's d effect sizes")
+        # axes[2].set_ylabel("Effect size")
+        # axes[2].set_xlabel('k (neighbours)')
+        #
+        # # Plot 4: AUC values
+        # for name, df in results.items():
+        #     axes[3].plot(df['k'], df['auc'], '^-',
+        #                  color=kernel_colors[name], lw=2)
+        # axes[3].set_title('AUC values')
+        # axes[3].set_xlabel('k (neighbours)')
+        #
+        # # Single legend for the entire figure
+        # fig.legend(loc='center right', bbox_to_anchor=(1.15, 0.5))
+        # plt.tight_layout()
 
     # ── 3. Summary plot: raw vs. adjusted parametric p‑values ──────────────────
     plt.figure(figsize=(12, 7))
