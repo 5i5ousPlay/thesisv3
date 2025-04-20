@@ -37,7 +37,7 @@ def spectral_partition(distance_matrix):
     return np.where(partition)[0], np.where(~partition)[0]
 
 
-def kernighan_lin_partition(graph, distance_matrix, seed=None):
+def kernighan_lin_partition(graph, seed=None):
     """
     Partition a set of nodes using the Kernighan-Lin algorithm based on a distance matrix.
     Returns two groups of node indices similar to the spectral_partition function.
@@ -56,13 +56,13 @@ def kernighan_lin_partition(graph, distance_matrix, seed=None):
     """
     rng = np.random.default_rng(seed)
 
-    # Gaussian edge weights (σ = median of positive distances)
-    positive_distances = distance_matrix[distance_matrix > 0]
-    sigma = np.median(positive_distances)
-
-    for u, v in graph.edges():
-        d = distance_matrix[u, v]
-        graph[u][v]["weight"] = np.exp(-(d ** 2) / (2 * sigma ** 2))
+    # # Gaussian edge weights (σ = median of positive distances)
+    # positive_distances = distance_matrix[distance_matrix > 0]
+    # sigma = np.median(positive_distances)
+    #
+    # for u, v in graph.edges():
+    #     d = distance_matrix[u, v]
+    #     graph[u][v]["weight"] = np.exp(-(d ** 2) / (2 * sigma ** 2))
 
     # Kernighan–Lin bisection
     partition = kernighan_lin_bisection(graph, weight="weight", seed=rng)
