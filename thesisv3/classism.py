@@ -1,15 +1,13 @@
 import pickle
-import os
 import traceback
 
 import music21
-from music21 import converter, environment
+from music21 import converter
 
 from thesisv3.analysis.visualization import *
-from thesisv3.preprocessing.preprocessing import *
 from thesisv3.building.building import distance_matrix_to_knn_graph_scaled, construct_graph
+from thesisv3.preprocessing.preprocessing import *
 from thesisv3.utils.file_manager import MusicFileManager
-from thesisv3.utils.helpers import save_to_pickle
 
 # Configure MuseScore paths
 env = environment.Environment()
@@ -210,7 +208,6 @@ class GraphBuilder:
         return self.graph
 
 
-
 class GraphBatcher:
     def __init__(self, k=5, output_dir='./Output/batcher_output', force_connectivity=False, label='expectancy|ir_mode'):
         self.k = k
@@ -253,7 +250,8 @@ class GraphBatcher:
             print(f"Analyzing {file}")
             try:
                 self.analyzer.run(self.file_manager.files[file])
-                graph = construct_graph(self.k, self.analyzer.distance_matrix, self.analyzer.prepped_segments, force_connectivity=self.force_connectivity, label=self.label)
+                graph = construct_graph(self.k, self.analyzer.distance_matrix, self.analyzer.prepped_segments,
+                                        force_connectivity=self.force_connectivity, label=self.label)
 
                 # Add to lists
                 self.graphs.append(graph)
@@ -289,7 +287,8 @@ class GraphBatcher:
                 # Get the distance matrix and segments from dictionaries
                 distance_matrix = self.distmat_dict[file]
 
-                graph = construct_graph(self.k, distance_matrix, self.segment_dict[file], force_connectivity=self.force_connectivity, label=self.label)
+                graph = construct_graph(self.k, distance_matrix, self.segment_dict[file],
+                                        force_connectivity=self.force_connectivity, label=self.label)
 
                 # Add to list and dictionary
                 self.graphs.append(graph)

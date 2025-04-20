@@ -1,10 +1,10 @@
 import os
 import pickle
 import sys
+from contextlib import contextmanager
 from typing import Type, Optional
-import grakel
-import grakel as gk
 
+import grakel
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
@@ -13,20 +13,15 @@ from grakel.kernels import (
     ShortestPath,
     VertexHistogram,
     PyramidMatch,
-    RandomWalkLabeled,
     # GraphletSampling,
 )
 from scipy.stats import shapiro
 from scipy.stats import ttest_ind, mannwhitneyu
 from statsmodels.stats.multitest import multipletests
-from tqdm import tqdm
 from tqdm.notebook import tqdm as tqdm_notebook
-from thesisv3.validation.comparison import compare_within_and_between_pieces
-from thesisv3.building.building import construct_graph
 
-import sys
-from contextlib import contextmanager
-from tqdm.notebook import tqdm as tqdm_notebook
+from thesisv3.building.building import construct_graph
+from thesisv3.validation.comparison import compare_within_and_between_pieces
 
 
 # Stream handler for redirecting prints to the progress bar

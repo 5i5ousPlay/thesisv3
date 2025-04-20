@@ -1,9 +1,5 @@
 import networkx as nx
 import numpy as np
-import pandas as pd
-from grakel import Graph
-from grakel.kernels import WeisfeilerLehman
-from networkx import Graph
 from networkx.algorithms.community import kernighan_lin_bisection
 from numpy.linalg import eigh
 from scipy.sparse import csgraph
@@ -101,4 +97,3 @@ def dist_mat_to_graph(k: int, distance_matrix):
     """
     knn_graph = kneighbors_graph(distance_matrix, n_neighbors=k, mode='connectivity')
     return nx.from_scipy_sparse_array(knn_graph)
-

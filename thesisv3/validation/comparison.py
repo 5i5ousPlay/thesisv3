@@ -1,16 +1,13 @@
-from grakel import Graph, ShortestPath
-from grakel.kernels import WeisfeilerLehman
-from thesisv3.analysis.analysis import get_sub_distance_matrix, spectral_partition, dist_mat_to_graph, \
-    kernighan_lin_partition
-from thesisv3.building.building import construct_graph
-import pandas as pd
-from grakel.kernels import LovaszTheta
-import networkx as nx
-from tqdm import tqdm
-from tqdm.notebook import tqdm as tqdm_notebook
-from grakel.utils import graph_from_networkx
 from typing import Type, Optional
+
+import networkx as nx
+import pandas as pd
+from grakel import Graph
+from grakel.kernels import LovaszTheta
 from grakel.kernels import ShortestPath
+from tqdm.notebook import tqdm as tqdm_notebook
+
+from thesisv3.analysis.analysis import kernighan_lin_partition
 
 
 def nx_to_grakel(G: nx.Graph) -> Graph:

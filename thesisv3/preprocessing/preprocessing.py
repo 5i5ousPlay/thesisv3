@@ -1,16 +1,16 @@
 import math
 import re
-from multiprocessing import cpu_count, Manager, Pool
+from multiprocessing import cpu_count, Pool
 
 import matplotlib.pyplot as plt
 import networkx as nx
 import numpy as np
 import pandas as pd
-
-from thesisv3.utils import worker
 from music21 import chord, note, stream, meter
 from sklearn.neighbors import kneighbors_graph
 from sklearn.preprocessing import MinMaxScaler
+
+from thesisv3.utils import worker
 
 
 # # Usage

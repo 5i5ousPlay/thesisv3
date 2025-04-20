@@ -1,12 +1,13 @@
-import networkx as nx
 import matplotlib.pyplot as plt
-from karateclub.graph_embedding.graph2vec import Graph2Vec
-from sklearn.decomposition import PCA
-from sklearn.cluster import KMeans
-from thesisv3.utils.helpers import get_piece_type
-import plotly.express as px
-import pandas as pd
+import networkx as nx
 import numpy as np
+import pandas as pd
+import plotly.express as px
+from karateclub.graph_embedding.graph2vec import Graph2Vec
+from sklearn.cluster import KMeans
+from sklearn.decomposition import PCA
+
+from thesisv3.utils.helpers import get_piece_type
 
 
 class GraphKMeans:
@@ -63,7 +64,6 @@ class GraphKMeans:
         :return: Dictionary with metrics for each k value
         """
         from sklearn.metrics import silhouette_score
-        import numpy as np
         import matplotlib.pyplot as plt
 
         results = {}
