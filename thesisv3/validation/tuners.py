@@ -83,7 +83,7 @@ class KNNGraphTuner:
             print(f'No graphs found for k={k}')
             return None, None
         # Get a single DataFrame containing BOTH within‑ and between‑piece sims
-        pair_df = compare_within_and_between_pieces(self.distmat_dict, graph_dict, self.graph_kernel, minimum_segments=10)
+        pair_df = compare_within_and_between_pieces(self.distmat_dict, graph_dict, self.graph_kernel, minimum_segments=11)
 
         # Separate the two cases
         within_mask = pair_df['Piece_1'] == pair_df['Piece_2']
@@ -267,10 +267,10 @@ def compare_kernels(batcher_dir='./Output/batcher_output', output_dir='./Output/
         'ShortestPath (Attr)': gk.ShortestPath(normalize=True),
 
         # Random Walk — edge weights are implicitly used via transition probabilities
-        # 'RandomWalkLabeled (default)': gk.RandomWalkLabeled(lamda=0.1, method_type='fast', kernel_type='geometric'),
+        'RandomWalkLabeled (default)': gk.RandomWalkLabeled(lamda=0.1, method_type='fast', kernel_type='geometric'),
 
         # # GraphletSampling does not use edge weights — we keep it for completeness
-        # 'GraphletSampling (norm)': gk.GraphletSampling(normalize=True),
+        'GraphletSampling (norm)': gk.GraphletSampling(normalize=True),
         # 'GraphletSampling (raw)': gk.GraphletSampling(normalize=False),
     }
 

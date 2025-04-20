@@ -88,7 +88,7 @@ def segments_to_distance_matrices(segments: dict, pickle_dir=None, pickle_file=N
 # Graph Construction & Visualization
 # ===============================
 def _bin_expectancy(e: float) -> str:
-    _EXP_CUTS = [0.15, 0.30, 0.50, 0.65, 0.83]
+    _EXP_CUTS = [0.36, 0.61, 0.67, 0.77]
     _EXP_LABELS = ["VeryLow", "Low", "Medium", "High", "VeryHigh"]
     for cut, lab in zip(_EXP_CUTS, _EXP_LABELS):
         if e <= cut:

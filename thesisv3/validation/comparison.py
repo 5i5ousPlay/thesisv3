@@ -69,7 +69,7 @@ def compare_graphs_kernel(grakel_graphs: list, graph_kernel):
     return similarity_matrix
 
 
-def compare_within_and_between_pieces(pieces_dist_mat, pieces_graph_dict, kernel, minimum_segments=10):
+def compare_within_and_between_pieces(pieces_dist_mat, pieces_graph_dict, kernel, minimum_segments=11):
     """
     Compares within-piece and between-piece similarity scores, labeling them accordingly.
 
