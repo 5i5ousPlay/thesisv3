@@ -1,10 +1,6 @@
 from music21 import converter
 from sklearn.manifold import MDS
-import matplotlib.pyplot as plt
-import numpy as np
-import networkx as nx
-from sklearn.neighbors import kneighbors_graph
-import os
+
 from thesisv3.preprocessing.preprocessing import *
 from thesisv3.utils import worker
 from thesisv3.utils.helpers import *
@@ -87,23 +83,60 @@ def segments_to_distance_matrices(segments: dict, pickle_dir=None, pickle_file=N
 # ===============================
 # Graph Construction & Visualization
 # ===============================
-def _bin_expectancy(e: float) -> str:
-    _EXP_CUTS = [0.36, 0.61, 0.67, 0.77]
-    _EXP_LABELS = ["VeryLow", "Low", "Medium", "High", "VeryHigh"]
-    for cut, lab in zip(_EXP_CUTS, _EXP_LABELS):
+# Precomputed cuts from your dataset:
+length_cuts = [8, 14]
+density_cuts = [2.0, 4.0]
+diversity_cuts = [4, 5]
+expect_cuts = [0.3580, 0.4980, 0.5639, 0.6200]
+
+
+# expect_cuts = [0.36, 0.61, 0.67, 0.77]
+
+def bin_length(n_notes):
+    if n_notes <= length_cuts[0]:
+        return "Short"
+    if n_notes <= length_cuts[1]:
+        return "Medium"
+    return "Long"
+
+
+def bin_density(density):
+    if density <= density_cuts[0]:
+        return "Sparse"
+    if density <= density_cuts[1]:
+        return "Moderate"
+    return "Dense"
+
+
+def bin_diversity(diversity):
+    if diversity <= diversity_cuts[0]:
+        return "Low"
+    if diversity <= diversity_cuts[1]:
+        return "Medium"
+    return "High"
+
+
+def bin_expectancy(e):
+    labels = ["VeryLow", "Low", "Medium", "High", "VeryHigh"]
+    for cut, lab in zip(expect_cuts, labels):
         if e <= cut:
             return lab
-    return _EXP_LABELS[-1]
+    return labels[-1]
 
 
 def construct_graph(k: int, distance_matrix: np.ndarray, segments: list[pd.DataFrame],
                     force_connectivity: bool = True, label: str = 'expectancy|ir_mode') -> nx.Graph:
+    num_segments = len(segments)
+    if distance_matrix.shape != (num_segments, num_segments):
+        raise ValueError("Shape of distance_matrix does not match the number of segments.")
+
     # k‑NN matrix whose entries already contain the DTW distance
     knn = kneighbors_graph(
         distance_matrix,
-        n_neighbors=k,
+        n_neighbors=min(k, num_segments - 1),  # Ensure k is not larger than possible neighbors
         mode="distance",
-        metric="precomputed"
+        metric="precomputed",
+        include_self=False  # Avoid self-loops initially
     )
 
     # Make it symmetric (kneighbors_graph is directed)
@@ -116,14 +149,16 @@ def construct_graph(k: int, distance_matrix: np.ndarray, segments: list[pd.DataF
     sigma = np.median(distance_matrix[distance_matrix > 0])
     for u, v, attr in G.edges(data=True):
         d = attr["dist"]
+        d_clamped = max(d, 1e-8)
         # attr["weight"] = d
-        gaussian = np.exp(-(d ** 2) / (2 * sigma ** 2))
+        gaussian = np.exp(-(d_clamped ** 2) / (2 * sigma ** 2))
         attr["weight"] = gaussian
-        attr["inv_weight"] = 1/(gaussian+1e-5)
+        attr["inv_weight"] = 1 / gaussian
 
     # Ensure connectivity, preserving both attrs
     if not nx.is_connected(G) and force_connectivity:
-        print("The k‑NN graph is disjoint. Ensuring connectivity…")
+        print(
+            f"k={k}: k‑NN graph is disjoint with {nx.number_connected_components(G)} components. Ensuring connectivity…")
         comps = list(nx.connected_components(G))
         for i in range(len(comps) - 1):
             best = min(
@@ -140,49 +175,50 @@ def construct_graph(k: int, distance_matrix: np.ndarray, segments: list[pd.DataF
                 weight=np.exp(-(d ** 2) / (2 * sigma ** 2)),
                 inv_weight=1 / (np.exp(-(d ** 2) / (2 * sigma ** 2)) + 1e-5)
             )
+    label_types = label.split('|') if '|' in label else [label]
+
+    feature_calculators = {
+        'expectancy': lambda seg: bin_expectancy(float(seg['expectancy'].mean())),
+        'ir_mode': lambda seg: seg['ir_symbol'].mode().iat[0] if not seg['ir_symbol'].mode().empty else "None",
+        'segment_length_binned': lambda seg: bin_length(len(seg)),
+        'rhythmic_density_binned': lambda seg: bin_density(
+            len(seg) / max(seg['duration_beats'].sum(), 1e-6)  # Avoid division by zero
+        ),
+        'ir_pattern_diversity': lambda seg: bin_diversity(len(seg['ir_symbol'].unique())),
+        'x': lambda seg: 'x'  # Uniform label
+    }
 
     for idx, seg in enumerate(segments):
-        mean_e = float(seg['expectancy'].mean())
-        e_bin = _bin_expectancy(mean_e)
-        ir_mode = seg['ir_symbol'].mode().iat[0] if not seg['ir_symbol'].mode().empty else "None"
+        if idx not in G:  # Node might have been isolated and not included if k=0 or disconnected
+            G.add_node(idx)  # Ensure node exists
 
-        if '|' in label:
-            # Handle combined labels like 'expectancy|ir_mode'
-            label_parts = []
-            for label_type in label.split('|'):
-                label_type = label_type.strip()
-                if label_type == 'expectancy':
-                    label_parts.append(e_bin)
-                elif label_type == 'ir_mode':
-                    label_parts.append(ir_mode)
-                elif label_type == 'octave_mode':
-                    octave_mode = seg['octave'].mode().iat[0] if not seg['octave'].mode().empty else "None"
-                    label_parts.append(octave_mode)
-                elif label_type == 'x':
-                    label_parts.append('x')
-                elif label_type == 'index':
-                    label_parts.append(str(idx))
-            node_label = '|'.join(label_parts)
-        else:
-            # Handle single label types
-            if label == 'expectancy':
-                node_label = e_bin
-            elif label == 'ir_mode':
-                node_label = ir_mode
-            elif label == 'octave_mode':
-                octave_mode = seg['octave'].mode().iat[0] if not seg['octave'].mode().empty else "None"
-                node_label = octave_mode
-            elif label == 'x':
-                node_label = 'x'
-            elif label == 'index':
-                node_label = str(idx)
+        # Calculate all possible features for this segment
+        node_features = {}
+        for feature_name, calculator in feature_calculators.items():
+            try:
+                node_features[feature_name] = calculator(seg)
+            except Exception as e:
+                print(f"Warning: Could not calculate feature '{feature_name}' for segment {idx}. Error: {e}")
+                node_features[feature_name] = "Error"  # Assign error label
+
+        # Construct the final label based on the requested types
+        final_label_parts = []
+        for label_type in label_types:
+            label_type = label_type.strip()
+            if label_type in node_features:
+                final_label_parts.append(str(node_features[label_type]))  # Ensure string conversion
             else:
-                # Default if label type is not recognized
-                node_label = f"{e_bin}|{ir_mode}"
+                print(f"Warning: Requested label type '{label_type}' not recognized. Skipping.")
 
-        G.nodes[idx]['label'] = node_label
-        G.nodes[idx]['expectancy'] = mean_e
+        G.nodes[idx]['label'] = '|'.join(final_label_parts) if final_label_parts else "UnknownLabel"
 
+        # Store raw expectancy as well
+        try:
+            G.nodes[idx]['expectancy'] = float(seg['expectancy'].mean())
+        except:
+            print("building expectancy porblem")
+            G.nodes[idx]['expectancy'] = np.nan
+    # print(f"Label: {final_label_parts}")
     return G
 
 

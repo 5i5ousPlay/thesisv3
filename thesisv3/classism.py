@@ -212,12 +212,13 @@ class GraphBuilder:
 
 
 class GraphBatcher:
-    def __init__(self, k=5, output_dir='./Output/batcher_output', force_connectivity=False):
+    def __init__(self, k=5, output_dir='./Output/batcher_output', force_connectivity=False, label='expectancy|ir_mode'):
         self.k = k
         self.graphs = []
         self.graph_dict = {}
         self.force_connectivity = force_connectivity
 
+        self.label = label
         self.segments = []
         self.segment_dict = {}
 
@@ -252,7 +253,7 @@ class GraphBatcher:
             print(f"Analyzing {file}")
             try:
                 self.analyzer.run(self.file_manager.files[file])
-                graph = construct_graph(self.k, self.analyzer.distance_matrix, self.analyzer.prepped_segments, force_connectivity=self.force_connectivity)
+                graph = construct_graph(self.k, self.analyzer.distance_matrix, self.analyzer.prepped_segments, force_connectivity=self.force_connectivity, label=self.label)
 
                 # Add to lists
                 self.graphs.append(graph)
@@ -288,7 +289,7 @@ class GraphBatcher:
                 # Get the distance matrix and segments from dictionaries
                 distance_matrix = self.distmat_dict[file]
 
-                graph = construct_graph(self.k, distance_matrix, self.segment_dict[file], force_connectivity=self.force_connectivity)
+                graph = construct_graph(self.k, distance_matrix, self.segment_dict[file], force_connectivity=self.force_connectivity, label=self.label)
 
                 # Add to list and dictionary
                 self.graphs.append(graph)
