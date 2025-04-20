@@ -97,7 +97,7 @@ def _bin_expectancy(e: float) -> str:
 
 
 def construct_graph(k: int, distance_matrix: np.ndarray, segments: list[pd.DataFrame],
-                    force_connectivity: bool = True) -> nx.Graph:
+                    force_connectivity: bool = True, label: str = 'expectancy|ir_mode') -> nx.Graph:
     # k‑NN matrix whose entries already contain the DTW distance
     knn = kneighbors_graph(
         distance_matrix,
@@ -117,7 +117,9 @@ def construct_graph(k: int, distance_matrix: np.ndarray, segments: list[pd.DataF
     for u, v, attr in G.edges(data=True):
         d = attr["dist"]
         # attr["weight"] = d
-        attr["weight"] = np.exp(-(d ** 2) / (2 * sigma ** 2))
+        gaussian = np.exp(-(d ** 2) / (2 * sigma ** 2))
+        attr["weight"] = gaussian
+        attr["inv_weight"] = 1/(gaussian+1e-5)
 
     # Ensure connectivity, preserving both attrs
     if not nx.is_connected(G) and force_connectivity:
@@ -135,17 +137,52 @@ def construct_graph(k: int, distance_matrix: np.ndarray, segments: list[pd.DataF
             G.add_edge(
                 u, v,
                 dist=d,
-                weight=np.exp(-(d ** 2) / (2 * sigma ** 2))
+                weight=np.exp(-(d ** 2) / (2 * sigma ** 2)),
+                inv_weight=1 / (np.exp(-(d ** 2) / (2 * sigma ** 2)) + 1e-5)
             )
+
     for idx, seg in enumerate(segments):
         mean_e = float(seg['expectancy'].mean())
         e_bin = _bin_expectancy(mean_e)
-        # pick the most frequent I‑R symbol in the segment
         ir_mode = seg['ir_symbol'].mode().iat[0] if not seg['ir_symbol'].mode().empty else "None"
 
-        G.nodes[idx]['label'] = f"{e_bin}|{ir_mode}"
-        # print(f"{e_bin}|{ir_mode}")
+        if '|' in label:
+            # Handle combined labels like 'expectancy|ir_mode'
+            label_parts = []
+            for label_type in label.split('|'):
+                label_type = label_type.strip()
+                if label_type == 'expectancy':
+                    label_parts.append(e_bin)
+                elif label_type == 'ir_mode':
+                    label_parts.append(ir_mode)
+                elif label_type == 'octave_mode':
+                    octave_mode = seg['octave'].mode().iat[0] if not seg['octave'].mode().empty else "None"
+                    label_parts.append(octave_mode)
+                elif label_type == 'x':
+                    label_parts.append('x')
+                elif label_type == 'index':
+                    label_parts.append(str(idx))
+            node_label = '|'.join(label_parts)
+        else:
+            # Handle single label types
+            if label == 'expectancy':
+                node_label = e_bin
+            elif label == 'ir_mode':
+                node_label = ir_mode
+            elif label == 'octave_mode':
+                octave_mode = seg['octave'].mode().iat[0] if not seg['octave'].mode().empty else "None"
+                node_label = octave_mode
+            elif label == 'x':
+                node_label = 'x'
+            elif label == 'index':
+                node_label = str(idx)
+            else:
+                # Default if label type is not recognized
+                node_label = f"{e_bin}|{ir_mode}"
+
+        G.nodes[idx]['label'] = node_label
         G.nodes[idx]['expectancy'] = mean_e
+
     return G
 
 

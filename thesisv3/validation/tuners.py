@@ -11,6 +11,7 @@ from scipy.stats import ttest_ind, mannwhitneyu
 from statsmodels.stats.multitest import multipletests
 
 from thesisv3.validation.comparison import compare_within_and_between_pieces
+from thesisv3.building.building import construct_graph
 
 
 class KNNGraphTuner:
@@ -48,6 +49,8 @@ class KNNGraphTuner:
         # Create dictionaries for mapping files to their data
         self.segment_dict = {}
         self.distmat_dict = {}
+        self.graph_dict = {}
+        self.new_graph_dict = False
 
         # Create output directory if it doesn't exist
         self.output_dir = output_dir
@@ -66,7 +69,7 @@ class KNNGraphTuner:
         # Flag to track if we're using batcher data
         self.load_progress()
 
-    def _kernel_based_similarity(self, k: int):
+    def _kernel_based_similarity(self, k: int, label: str = None):
         # Load appropriate knn-graph dictionary
         def safe_load(path, default_value):
             if os.path.exists(path):
@@ -75,15 +78,41 @@ class KNNGraphTuner:
                         return pickle.load(f)
                 except Exception as e:
                     print(f"Error loading {path}: {e}")
+                    raise ValueError(f"Failed to load graphs from {path}: {e}")
             return default_value
 
-        graphs_path = os.path.join(self.batcher_dir, f'graphs_k{k}.pkl')
-        graph_dict = safe_load(graphs_path, {})
-        if not graph_dict:
-            print(f'No graphs found for k={k}')
-            return None, None
+        # Check if we need to initialize graphs
+        if not self.graph_dict:
+            # First time running - need to get graphs
+            if label:
+                # Case 1: Custom label provided - construct new graphs
+                print(f"Constructing graphs with custom label: {label}")
+                for composer, distmat in self.distmat_dict.items():
+                    self.graph_dict[composer] = construct_graph(k, distmat, self.segment_dict[composer], label=label)
+                self.new_graph_dict = True
+                self.label_used = label  # Remember which label we used
+            else:
+                # Case 2: No label - try to load from pickle
+                print(f"Loading pre-constructed graphs for k={k}")
+                graphs_path = os.path.join(self.batcher_dir, f'graphs_k{k}.pkl')
+                self.graph_dict = safe_load(graphs_path, {})
+                if not self.graph_dict:
+                    raise ValueError(f"No graphs found for k={k} and failed to load from {graphs_path}")
+                self.new_graph_dict = True
+                self.label_used = None
+        elif label != getattr(self, 'label_used', None):
+            # We have graphs but the label changed - reconstruct
+            print(f"Label changed from {getattr(self, 'label_used', None)} to {label}. Reconstructing graphs.")
+            self.graph_dict = {}
+            for composer, distmat in self.distmat_dict.items():
+                self.graph_dict[composer] = construct_graph(k, distmat, self.segment_dict[composer], label=label)
+            self.label_used = label
+        else:
+            # We already have the right graphs, just reuse them
+            print(f"Reusing existing graphs with label: {getattr(self, 'label_used', None)}")
+
         # Get a single DataFrame containing BOTH within‑ and between‑piece sims
-        pair_df = compare_within_and_between_pieces(self.distmat_dict, graph_dict, self.graph_kernel, minimum_segments=11)
+        pair_df = compare_within_and_between_pieces(self.distmat_dict, self.graph_dict, self.graph_kernel, minimum_segments=11)
 
         # Separate the two cases
         within_mask = pair_df['Piece_1'] == pair_df['Piece_2']
@@ -92,7 +121,7 @@ class KNNGraphTuner:
 
         return within_scores, between_scores
 
-    def calculate_graph_statistics(self) -> pd.DataFrame:
+    def calculate_graph_statistics(self, label: str = None) -> pd.DataFrame:
         """
         Calculates the normality of the within and between graph scores as well as the
         corresponding p-value for each k-value within the specified range, with
@@ -121,7 +150,7 @@ class KNNGraphTuner:
 
             idx = len(graph_statistics)
             print(f"Calculating graph statistics at k = {k}")
-            within, between = self._kernel_based_similarity(k)
+            within, between = self._kernel_based_similarity(k, label)
 
             # Normality tests
             _, p_norm_within = shapiro(within)
@@ -245,7 +274,7 @@ class KNNGraphTuner:
                   f"{len(self.results)} k values already calculated")
 
 
-def compare_kernels(batcher_dir='./Output/batcher_output', output_dir='./Output/tuner_output', min_k=2, max_k=10, k_step=1):
+def compare_kernels(batcher_dir='./Output/batcher_output', output_dir='./Output/tuner_output', label=None, min_k=2, max_k=10, k_step=1):
     """
     Benchmark several graph‑kernel families on the **same** music dataset,
     plotting FDR‑corrected p‑values (and saving the raw DataFrames).
@@ -260,21 +289,32 @@ def compare_kernels(batcher_dir='./Output/batcher_output', output_dir='./Output/
     kernels = {
         # Weisfeiler-Lehman doesn't use edge weights, but we keep both normalized and raw versions
         'WeisfeilerLehman': gk.WeisfeilerLehman(n_iter=5, normalize=True),
-        'WeisfeilerLehman (raw)': gk.WeisfeilerLehman(n_iter=5, normalize=False),
+        # 'WeisfeilerLehman (raw)': gk.WeisfeilerLehman(n_iter=5, normalize=False),
 
         # Shortest Path
-        'ShortestPath': gk.ShortestPath(normalize=True, with_labels=True),
-        'ShortestPath (Attr)': gk.ShortestPath(normalize=True),
+        # 'ShortestPath': gk.ShortestPath(normalize=True, with_labels=True),
+        # 'ShortestPath (Attr)': gk.ShortestPath(normalize=True),
+
+
+        # "VertexHistogram": gk.VertexHistogram(normalize=True),
+        # "PyramidMatch": gk.PyramidMatch(normalize=True),
+        # "RandomWalkLabeled": gk.RandomWalkLabeled(lamda=0.1, method_type="fast", kernel_type="geometric")
+
 
         # Random Walk — edge weights are implicitly used via transition probabilities
-        'RandomWalkLabeled (default)': gk.RandomWalkLabeled(lamda=0.1, method_type='fast', kernel_type='geometric'),
+        # 'RandomWalkLabeled (default)': gk.RandomWalkLabeled(lamda=0.1, method_type='fast', kernel_type='geometric'),
 
         # # GraphletSampling does not use edge weights — we keep it for completeness
-        'GraphletSampling (norm)': gk.GraphletSampling(normalize=True),
+        # 'GraphletSampling (norm)': gk.GraphletSampling(normalize=True),
         # 'GraphletSampling (raw)': gk.GraphletSampling(normalize=False),
     }
 
     results, figs = {}, []
+
+    if label is not None:
+        # Replace | with _ for directory naming
+        label_dir = label.replace('|', '_')
+        output_dir = f"{output_dir}_{label_dir}"
 
     # ── 2. Loop over kernels ─────────────────────────────────────────────────
     for name, kernel in kernels.items():
@@ -289,7 +329,7 @@ def compare_kernels(batcher_dir='./Output/batcher_output', output_dir='./Output/
             output_dir=os.path.join(output_dir, name.lower().replace(" ", "_"))
         )
 
-        df = tuner.calculate_graph_statistics()
+        df = tuner.calculate_graph_statistics(label=label)
         results[name] = df  # keep for later
 
         # ── Plot FDR‑corrected p‑values for this kernel ──────────────────────
