@@ -3,6 +3,7 @@ import os
 import networkx as nx
 from grakel import Graph
 from grakel.kernels import LovaszTheta
+from thesisv3.preprocessing.preprocessing import segments_to_distance_matrix
 
 
 def save_to_pickle(data, filename):
@@ -78,3 +79,99 @@ def compare_graphs_kernel(graph_list: list, graph_kernel):
         return similarity_matrix
     similarity_matrix = kernel.fit_transform(grakel_graphs)
     return similarity_matrix
+
+
+def get_piece_type(piece_name):
+    parts = piece_name.split('|')
+    if len(parts) > 1:
+        piece_part = parts[1].strip()
+
+        # Special handling for Chopin's Études
+        if 'Étude' in piece_part:
+            if 'Op. 10' in piece_part:
+                return "Chopin's Études Op. 10"
+            elif 'Op. 25' in piece_part:
+                return "Chopin's Études Op. 25"
+            else:
+                return 'Études (General)'
+        elif 'Waltz' in piece_part:
+            return "Chopin's Waltzes"
+        elif 'Sonata' in piece_part:
+            return "Ysaÿe's Violin Sonatas"
+        elif 'Suite' in piece_part:
+            return "Bach's Cello Suites"
+        elif 'Ballade' in piece_part:
+            return "Chopin's Ballades"
+        else:
+            # Default to first word
+            return piece_part.split(' ')[0]
+    return 'Unknown'
+
+
+def concatenate_segments(segment_dict, graph_dict=None):
+    """
+    Process a dictionary of music segments and create a distance matrix with metadata,
+    including node labels from the graph.
+
+    Parameters:
+    -----------
+    segment_dict : dict
+        Dictionary where keys are composer/piece strings in format "composer | piece name"
+        and values are lists of dataframes representing segments
+
+    graph_dict : dict, optional
+        Dictionary where keys match segment_dict keys and values are the corresponding
+        networkx graphs with node labels
+
+    Returns:
+    --------
+    tuple
+        (all_segments, segment_metadata, distance_matrix)
+        - all_segments: List of all segment dataframes
+        - segment_metadata: List of dictionaries with metadata for each segment
+        - distance_matrix: NumPy array of pairwise distances between segments
+    """
+    # Create a consolidated list of all segments
+    all_segments = []
+    segment_metadata = []  # To track which composer and piece each segment belongs to
+    segment_indices = {}  # Keep track of global indices for each piece
+
+    for composer_piece, df_list in segment_dict.items():
+        # Extract composer and determine piece type
+        composer = composer_piece.split('|')[0].strip() if '|' in composer_piece else composer_piece
+        piece_type = get_piece_type(composer_piece)
+
+        # If we have a graph for this piece, get the node labels
+        graph = graph_dict.get(composer_piece) if graph_dict else None
+
+        # Start tracking indices for this piece
+        segment_indices[composer_piece] = []
+
+        # for every segment (node) in a piece (one graph)
+        for segment_idx, df in enumerate(df_list):
+            # Store the global index for this segment
+
+            # Prepare metadata with optional node label
+            metadata = {
+                'composer': composer,
+                'piece_name': composer_piece,
+                'piece_type': piece_type,
+                'segment_idx': segment_idx,
+            }
+
+            # Add node label if graph is available
+            if graph and segment_idx in graph.nodes:  # Use piece_idx instead
+                metadata['node_label'] = graph.nodes[segment_idx].get('label',
+                                                                    f"Node {segment_idx}")  # Use piece_idx here too
+                # Add other attributes using piece_idx for lookup
+                for attr_key, attr_value in graph.nodes[segment_idx].items():
+                    if attr_key != 'label':
+                        metadata[f'node_{attr_key}'] = attr_value
+
+            all_segments.append(df)
+            segment_metadata.append(metadata)
+
+    # Generate distance matrix
+    distance_matrix = segments_to_distance_matrix(all_segments)
+
+    return all_segments, segment_metadata, distance_matrix

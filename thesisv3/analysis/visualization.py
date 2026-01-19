@@ -15,6 +15,12 @@ from music21 import (
     environment
 )
 from pygame import mixer
+import numpy as np
+import matplotlib.pyplot as plt
+import matplotlib.patches as mpatches
+from matplotlib.colors import ListedColormap
+import seaborn as sns
+from thesisv3.utils.helpers import get_piece_type
 
 
 def visualize_segment(segments, segment_index, original_score, show_score=True):
@@ -22,6 +28,7 @@ def visualize_segment(segments, segment_index, original_score, show_score=True):
     Visualizes a specific segment from a musical score using an additive approach,
     building a new score with only the desired elements.
     """
+
     def approximate_to_fraction(df, column='onset_beats', max_denominator=16):
         df[column] = df[column].apply(
             lambda x: float(Fraction(x).limit_denominator(max_denominator))
@@ -676,6 +683,7 @@ import copy
 import math
 from music21 import stream, note, chord, expressions, tempo
 
+
 def visualize_score_with_colored_segments(original_score, segments):
     """
     Creates a visualization of the full score with color-coded segments and labels.
@@ -820,8 +828,6 @@ def visualize_notes_with_symbols(notes_with_symbols, original_score, all_parts=F
     return new_score
 
 
-
-
 # This version flattens
 def visualize_notes_with_symbols_flatten(notes_with_symbols, original_score, all_parts=False):
     """
@@ -862,3 +868,560 @@ def visualize_notes_with_symbols_flatten(notes_with_symbols, original_score, all
                 break  # No more symbols to assign.
 
     return new_score
+
+
+def visualize_mds(coordinates, segment_metadata, color_by='composer', figsize=(14, 12),
+                  save_path=None, show=True):
+    """
+    Create MDS visualization of music segments colored by specified attribute.
+
+    Parameters:
+    -----------
+    coordinates : numpy.ndarray
+        MDS coordinates for each segment, shape (n_segments, 2)
+    segment_metadata : list
+        List of dictionaries containing metadata for each segment
+    color_by : str, optional
+        Attribute to color points by: 'composer', 'piece_type', or 'piece'
+    figsize : tuple, optional
+        Figure size as (width, height)
+    save_path : str, optional
+        Path to save the figure. If None, the figure won't be saved.
+    show : bool, optional
+        Whether to display the plot
+
+    Returns:
+    --------
+    matplotlib.figure.Figure
+        The created figure
+    """
+    plt.figure(figsize=figsize)
+
+    # Handle coloring by composer
+    if color_by == 'composer':
+        # Get unique composers
+        unique_items = sorted(list(set(meta['composer'] for meta in segment_metadata)))
+        item_to_idx = {item: i for i, item in enumerate(unique_items)}
+
+        # Create a color palette
+        palette = sns.color_palette("husl", len(unique_items))
+        cmap = ListedColormap(palette)
+
+        # Assign colors based on composer
+        colors = [item_to_idx[meta['composer']] for meta in segment_metadata]
+
+        # Prepare legend details
+        legend_title = "Composers"
+        label_formatter = lambda item: item
+        title = "MDS Visualization of Music Segments by Composer"
+        use_special_legend = False
+
+    # Handle coloring by piece type
+    elif color_by == 'piece_type':
+        # Get unique piece types
+        unique_items = sorted(list(set(meta['piece_type'] for meta in segment_metadata)))
+        item_to_idx = {item: i for i, item in enumerate(unique_items)}
+
+        # Create a color palette
+        palette = sns.color_palette("husl", len(unique_items))
+        cmap = ListedColormap(palette)
+
+        # Assign colors based on piece type
+        colors = [item_to_idx[meta['piece_type']] for meta in segment_metadata]
+
+        # Prepare legend details
+        legend_title = "Piece Types"
+        label_formatter = lambda item: item
+        title = "MDS Visualization of Music Segments by Piece Type"
+        use_special_legend = False
+
+    # Handle coloring by piece
+    elif color_by == 'piece':
+        # Create a unique identifier for each piece
+        piece_items = [(meta['composer'], meta['piece_name']) for meta in segment_metadata]
+        unique_items = sorted(list(set(piece_items)))
+        item_to_idx = {item: i for i, item in enumerate(unique_items)}
+
+        # Create a color palette for pieces
+        if len(unique_items) <= 10:
+            palette = sns.color_palette("husl", len(unique_items))
+        else:
+            palette = sns.color_palette("tab20", min(20, len(unique_items)))
+            # If more than 20 pieces, colors will repeat
+            if len(unique_items) > 20:
+                palette = palette * (len(unique_items) // 20 + 1)
+                palette = palette[:len(unique_items)]
+
+        cmap = ListedColormap(palette)
+
+        # Assign colors based on piece
+        colors = [item_to_idx[(meta['composer'], meta['piece_name'])] for meta in segment_metadata]
+
+        # Prepare legend details
+        legend_title = "Pieces"
+        label_formatter = lambda item: f"{item[0]} - Piece {item[1]}"
+        title = "MDS Visualization of Music Segments by Piece"
+
+        # Check if special legend handling is needed
+        legend_limit = 20
+        use_special_legend = len(unique_items) > legend_limit
+
+    else:
+        raise ValueError("color_by must be one of: 'composer', 'piece_type', 'piece'")
+
+    # Create scatter plot
+    scatter = plt.scatter(
+        coordinates[:, 0],
+        coordinates[:, 1],
+        c=colors,
+        cmap=cmap,
+        s=100,
+        alpha=0.8
+    )
+
+    # Create legend
+    if use_special_legend:
+        print(f"Too many pieces ({len(unique_items)}) for a clear legend, showing composers instead")
+        # Use composers for legend instead
+        unique_composers = sorted(list(set(meta['composer'] for meta in segment_metadata)))
+        composer_to_idx = {composer: i for i, composer in enumerate(unique_composers)}
+        composer_palette = sns.color_palette("husl", len(unique_composers))
+
+        patches = [mpatches.Patch(color=composer_palette[composer_to_idx[composer]],
+                                  label=composer) for composer in unique_composers]
+        plt.legend(handles=patches, title="Composers", loc="best")
+    else:
+        patches = [mpatches.Patch(color=palette[item_to_idx[item]],
+                                  label=label_formatter(item)) for item in unique_items]
+
+        legend_kwargs = {'handles': patches, 'title': legend_title, 'loc': "best"}
+        if color_by == 'piece':
+            # Adjustments for piece legend which can be larger
+            legend_kwargs.update({'bbox_to_anchor': (1.05, 1), 'fontsize': 'small'})
+
+        plt.legend(**legend_kwargs)
+
+    # Set titles and layout
+    plt.title(title)
+    plt.xlabel("Dimension 1")
+    plt.ylabel("Dimension 2")
+    plt.tight_layout()
+
+    # Save or show the plot
+    if save_path:
+        plt.savefig(save_path)
+
+    if not show:
+        plt.close()
+    else:
+        plt.show()
+
+    return plt.gcf()
+
+
+# Optional function for creating interactive plots with Plotly
+def visualize_mds_interactive(coordinates, segment_metadata, color_by='composer', output_path=None):
+    """Create an interactive visualization with Plotly."""
+    try:
+        import plotly.express as px
+        import pandas as pd
+
+        # Create a DataFrame for Plotly
+        plot_df = pd.DataFrame({
+            'x': coordinates[:, 0],
+            'y': coordinates[:, 1],
+            'composer': [meta['composer'] for meta in segment_metadata],
+            'piece': [f"Piece {meta['piece_name']}" for meta in segment_metadata],
+            'piece_type': [meta['piece_type'] for meta in segment_metadata],
+            'segment_idx': range(len(segment_metadata))
+        })
+
+        # Determine color column and hover data based on color_by
+        if color_by == 'composer':
+            color_col = 'composer'
+            hover_data = ['piece', 'piece_type', 'segment_idx']
+            title = "Interactive MDS Visualization by Composer"
+        elif color_by == 'piece_type':
+            color_col = 'piece_type'
+            hover_data = ['composer', 'piece', 'segment_idx']
+            title = "Interactive MDS Visualization by Piece Type"
+        elif color_by == 'piece':
+            color_col = 'piece'
+            hover_data = ['composer', 'piece_type', 'segment_idx']
+            title = "Interactive MDS Visualization by Piece"
+
+        # Create interactive plot
+        fig = px.scatter(
+            plot_df, x='x', y='y',
+            color=color_col,
+            hover_data=hover_data,
+            title=title,
+            labels={'x': 'Dimension 1', 'y': 'Dimension 2'}
+        )
+
+        fig.update_traces(marker=dict(size=10))
+
+        if output_path:
+            fig.write_html(output_path)
+            print(f"Created interactive visualization as '{output_path}'")
+
+        return fig
+
+    except ImportError:
+        print("Plotly not installed. Skipping interactive visualization.")
+        return None
+
+
+# ===============================
+# Heatmap Visualizations
+# ===============================
+
+
+def plot_similarity_matrix_heatmap(df_filtered, figsize=(30, 25), cmap="Blues", save_path=None):
+    """
+    Creates a heatmap of the upper triangle of the similarity matrix.
+
+    Parameters:
+    -----------
+    df_filtered : pd.DataFrame
+        DataFrame with columns 'Piece_1', 'Piece_2', 'Between_Similarity'
+    figsize : tuple, optional
+        Figure size (width, height)
+    cmap : str, optional
+        Colormap for the heatmap
+    save_path : str, optional
+        Path to save the figure
+
+    Returns:
+    --------
+    similarity_matrix : pd.DataFrame
+        Pivot table of the similarity matrix
+    """
+    # Create pivot table
+    similarity_matrix = df_filtered.pivot_table(
+        index='Piece_1',
+        columns='Piece_2',
+        values='Between_Similarity'
+    )
+
+    # Create mask for upper triangle
+    mask = np.triu(np.ones_like(similarity_matrix, dtype=bool))
+    np.fill_diagonal(mask, False)
+
+    # Create heatmap
+    plt.figure(figsize=figsize)
+    sns.heatmap(
+        similarity_matrix.iloc[::-1],
+        cmap=cmap,
+        annot=True,
+        cbar=True,
+        fmt=".2f",
+        vmin=0,
+        mask=mask[::-1]
+    )
+
+    # Configure and show plot
+    plt.title("Heatmap of Between Pieces Similarity")
+    plt.tight_layout()
+
+    if save_path:
+        plt.savefig(save_path, dpi=300, bbox_inches='tight')
+
+    plt.show()
+
+    return similarity_matrix
+
+
+def analyze_similarity_statistics(similarity_matrix, top_n=10):
+    """
+    Analyzes the similarity matrix to find median, top N, and bottom N similarities,
+    and N similarities closest to the median.
+
+    Parameters:
+    -----------
+    similarity_matrix : pd.DataFrame
+        Square matrix of similarities
+    top_n : int, optional
+        Number of top, bottom, and median-closest similarities to show
+
+    Returns:
+    --------
+    dict
+        Dictionary containing statistics and top/bottom/median similarities
+    """
+    # Get upper triangle values
+    upper_triangle = similarity_matrix.where(
+        np.triu(np.ones_like(similarity_matrix), k=1).astype(bool)
+    )
+
+    # Reshape to get all values in a Series
+    similarities = upper_triangle.stack().reset_index()
+    similarities.columns = ['Piece_1', 'Piece_2', 'Similarity']
+
+    # Calculate median similarity
+    median_similarity = similarities['Similarity'].median()
+    print(f"Median Similarity: {median_similarity:.4f}")
+
+    # Get top N highest similarities
+    top_n_highest = similarities.nlargest(top_n, 'Similarity')
+    print(f"\nTop {top_n} Highest Similarities:")
+    for i, (idx, row) in enumerate(top_n_highest.iterrows(), 1):
+        print(f"{i}. {row['Piece_1']} - {row['Piece_2']}: {row['Similarity']:.4f}")
+
+    # Get bottom N lowest similarities
+    bottom_n_lowest = similarities.nsmallest(top_n, 'Similarity')
+    print(f"\nBottom {top_n} Lowest Similarities:")
+    for i, (idx, row) in enumerate(bottom_n_lowest.iterrows(), 1):
+        print(f"{i}. {row['Piece_1']} - {row['Piece_2']}: {row['Similarity']:.4f}")
+
+    # Get N similarities closest to the median
+    similarities['Distance_From_Median'] = abs(similarities['Similarity'] - median_similarity)
+    median_closest = similarities.nsmallest(top_n, 'Distance_From_Median')
+    print(f"\n{top_n} Similarities Closest to Median:")
+    for i, (idx, row) in enumerate(median_closest.iterrows(), 1):
+        print(
+            f"{i}. {row['Piece_1']} - {row['Piece_2']}: {row['Similarity']:.4f} (Distance: {row['Distance_From_Median']:.4f})")
+
+    # Return statistics as dictionary
+    return {
+        'median': median_similarity,
+        'top_similarities': top_n_highest,
+        'bottom_similarities': bottom_n_lowest,
+        'median_similarities': median_closest
+    }
+
+
+def plot_piece_type_similarity(similarity_matrix,
+                               excluded_pieces=None, figsize=(14, 12),
+                               cmap="Blues", save_path=None):
+    """
+    Creates a heatmap showing average similarities between piece types.
+
+    Parameters:
+    -----------
+    similarity_matrix : pd.DataFrame
+        Square matrix of similarities
+    get_piece_type_func : function
+        Function that takes a piece name and returns its type
+    excluded_pieces : list, optional
+        List of piece names to exclude from analysis
+    figsize : tuple, optional
+        Figure size (width, height)
+    cmap : str, optional
+        Colormap for the heatmap
+    save_path : str, optional
+        Path to save the figure
+
+    Returns:
+    --------
+    avg_df : pd.DataFrame
+        Average similarity matrix by piece type
+    """
+    df = similarity_matrix.copy()
+
+    # Set default excluded pieces if None
+    if excluded_pieces is None:
+        excluded_pieces = []
+
+    # Create a dictionary to map pieces to their types
+    piece_to_type = {}
+
+    # Map pieces to types
+    for piece in df.index:
+        if piece not in excluded_pieces:
+            piece_to_type[piece] = get_piece_type(piece)
+
+    for piece in df.columns:
+        if piece not in excluded_pieces:
+            piece_to_type[piece] = get_piece_type(piece)
+
+    # Get unique piece types
+    piece_types = sorted(set(piece_to_type.values()))
+
+    # Create matrices to store sums and counts
+    similarity_sum = {t1: {t2: 0 for t2 in piece_types} for t1 in piece_types}
+    similarity_count = {t1: {t2: 0 for t2 in piece_types} for t1 in piece_types}
+
+    # Calculate sums and counts
+    for row_piece in df.index:
+        if row_piece in excluded_pieces:
+            continue
+        row_type = piece_to_type[row_piece]
+        for col_piece in df.columns:
+            if col_piece in excluded_pieces:
+                continue
+            col_type = piece_to_type[col_piece]
+            similarity = df.loc[row_piece, col_piece]
+            if pd.notna(similarity):
+                similarity_sum[row_type][col_type] += similarity
+                similarity_count[row_type][col_type] += 1
+
+    # Calculate averages
+    avg_similarity = {
+        t1: {
+            t2: (similarity_sum[t1][t2] / similarity_count[t1][t2]
+                 if similarity_count[t1][t2] > 0 else 0)
+            for t2 in piece_types
+        }
+        for t1 in piece_types
+    }
+
+    # Convert to pandas DataFrame for easier visualization
+    avg_df = pd.DataFrame(avg_similarity)
+
+    # Create the heatmap
+    plt.figure(figsize=figsize)
+    plt.rcParams.update({'font.size': 14})
+    ax = sns.heatmap(
+        avg_df,
+        annot=True,
+        cmap=cmap,
+        fmt=".3f",
+        linewidths=0.5,
+        cbar_kws={"shrink": 0.8},
+        annot_kws={"size": 16}
+    )
+
+    # Adjust axis labels font size
+    plt.xticks(fontsize=16, rotation=45, ha='right')
+    plt.yticks(fontsize=16, rotation=45, ha='right')
+
+    # Make colorbar ticks larger
+    cbar = ax.collections[0].colorbar
+    cbar.ax.tick_params(labelsize=14)
+
+    plt.tight_layout()
+
+    if save_path:
+        plt.savefig(save_path, dpi=300, bbox_inches='tight')
+
+    plt.show()
+
+    # Print the average similarity matrix for reference
+    print("Average Similarity Matrix:")
+    print(avg_df.round(3))
+
+    return avg_df
+
+
+def plot_sorted_similarity_heatmap(similarity_matrix,
+                                   figsize=(16, 14), cmap="Blues",
+                                   save_path=None):
+    """
+    Creates a sorted heatmap with divider lines between different piece types.
+
+    Parameters:
+    -----------
+    similarity_matrix : pd.DataFrame
+        Square matrix of similarities
+    get_piece_type_func : function
+        Function that takes a piece name and returns its type
+    figsize : tuple, optional
+        Figure size (width, height)
+    cmap : str, optional
+        Colormap for the heatmap
+    save_path : str, optional
+        Path to save the figure
+    """
+    # Sort the matrix by piece type
+    piece_types = [get_piece_type(piece) for piece in similarity_matrix.index]
+    sorted_indices = sorted(range(len(piece_types)),
+                            key=lambda i: (piece_types[i], similarity_matrix.index[i]))
+    sorted_pieces = [similarity_matrix.index[i] for i in sorted_indices]
+
+    # Reindex the matrix with the sorted pieces
+    sorted_matrix = similarity_matrix.reindex(index=sorted_pieces, columns=sorted_pieces)
+
+    # Create the heatmap
+    plt.figure(figsize=figsize)
+    ax = sns.heatmap(
+        sorted_matrix,
+        cmap=cmap,
+        annot=False,
+        fmt=".2f",
+        linewidths=0.5,
+        cbar_kws={
+            "shrink": 0.8,
+            "label": "Similarity Score",
+        }
+    )
+
+    # Remove title and axis labels
+    plt.xticks([])
+    plt.yticks([])
+    plt.title("")
+
+    # Add divider lines between piece types
+    prev_type = None
+    for i, piece in enumerate(sorted_matrix.index):
+        current_type = get_piece_type(piece)
+        if current_type != prev_type and i > 0:
+            plt.axhline(y=i, color='red', linewidth=2)
+            plt.axvline(x=i, color='red', linewidth=2)
+        prev_type = current_type
+
+    plt.tight_layout()
+
+    if save_path:
+        plt.savefig(save_path, dpi=300, bbox_inches='tight')
+
+    plt.show()
+
+    return sorted_matrix
+
+
+def analyze_similarity(df_filtered, excluded_pieces=None,
+                       top_n=10, output_dir="./Output/analysis"):
+    """
+    Complete analysis pipeline for similarity data.
+
+    Parameters:
+    -----------
+    df_filtered : pd.DataFrame
+        DataFrame with columns 'Piece_1', 'Piece_2', 'Between_Similarity'
+    get_piece_type_func : function
+        Function that takes a piece name and returns its type
+    excluded_pieces : list, optional
+        List of piece names to exclude from analysis
+    top_n : int, optional
+        Number of top and bottom similarities to show
+    output_dir : str, optional
+        Directory to save output figures
+
+    Returns:
+    --------
+    dict
+        Dictionary containing analysis results
+    """
+    import os
+    os.makedirs(output_dir, exist_ok=True)
+
+    # 1. Create and plot similarity matrix
+    similarity_matrix = plot_similarity_matrix_heatmap(
+        df_filtered,
+        save_path=os.path.join(output_dir, "similarity_heatmap.png")
+    )
+
+    # 2. Analyze similarity statistics
+    stats = analyze_similarity_statistics(similarity_matrix, top_n=top_n)
+
+    # 3. Create piece type similarity heatmap
+    avg_df = plot_piece_type_similarity(
+        similarity_matrix,
+        excluded_pieces=excluded_pieces,
+        save_path=os.path.join(output_dir, "piece_type_similarity.png")
+    )
+
+    # 4. Create sorted similarity heatmap with dividers
+    sorted_matrix = plot_sorted_similarity_heatmap(
+        similarity_matrix,
+        save_path=os.path.join(output_dir, "sorted_similarity_heatmap.png")
+    )
+
+    # Return all results
+    return {
+        'similarity_matrix': similarity_matrix,
+        'statistics': stats,
+        'piece_type_avg': avg_df,
+        'sorted_matrix': sorted_matrix
+    }

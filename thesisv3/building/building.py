@@ -83,6 +83,148 @@ def segments_to_distance_matrices(segments: dict, pickle_dir=None, pickle_file=N
 # ===============================
 # Graph Construction & Visualization
 # ===============================
+# Precomputed cuts from your dataset:
+length_cuts = [8, 14]
+density_cuts = [2.0, 4.0]
+diversity_cuts = [4, 5]
+# expect_cuts = [0.3580, 0.4980, 0.5639, 0.6200]
+
+
+expect_cuts = [0.36, 0.61, 0.67, 0.77]
+
+def bin_length(n_notes):
+    if n_notes <= length_cuts[0]:
+        return "Short"
+    if n_notes <= length_cuts[1]:
+        return "Medium"
+    return "Long"
+
+
+def bin_density(density):
+    if density <= density_cuts[0]:
+        return "Sparse"
+    if density <= density_cuts[1]:
+        return "Moderate"
+    return "Dense"
+
+
+def bin_diversity(diversity):
+    if diversity <= diversity_cuts[0]:
+        return "Low"
+    if diversity <= diversity_cuts[1]:
+        return "Medium"
+    return "High"
+
+
+def bin_expectancy(e):
+    labels = ["VeryLow", "Low", "Medium", "High", "VeryHigh"]
+    for cut, lab in zip(expect_cuts, labels):
+        if e <= cut:
+            return lab
+    return labels[-1]
+
+
+def construct_graph(k: int, distance_matrix: np.ndarray, segments: list[pd.DataFrame],
+                    force_connectivity: bool = True, label: str = 'expectancy|ir_mode') -> nx.Graph:
+    num_segments = len(segments)
+    if distance_matrix.shape != (num_segments, num_segments):
+        raise ValueError("Shape of distance_matrix does not match the number of segments.")
+
+    # k‑NN matrix whose entries already contain the DTW distance
+    knn = kneighbors_graph(
+        distance_matrix,
+        n_neighbors=min(k, num_segments - 1),  # Ensure k is not larger than possible neighbors
+        mode="distance",
+        metric="precomputed",
+        include_self=False  # Avoid self-loops initially
+    )
+
+    # Make it symmetric (kneighbors_graph is directed)
+    knn = 0.5 * (knn + knn.T)
+
+    # Build NX graph; keep the distance in edge attr "dist"
+    G = nx.from_scipy_sparse_array(knn, edge_attribute="dist")
+
+    # 4) Convert distance -> similarity weight (Gaussian)
+    sigma = np.median(distance_matrix[distance_matrix > 0])
+    for u, v, attr in G.edges(data=True):
+        d = attr["dist"]
+        d_clamped = max(d, 1e-8)
+        # attr["weight"] = d
+        gaussian = np.exp(-(d_clamped ** 2) / (2 * sigma ** 2))
+        attr["weight"] = gaussian
+        attr["inv_weight"] = 1 / gaussian
+
+    # Ensure connectivity, preserving both attrs
+    if not nx.is_connected(G) and force_connectivity:
+        print(
+            f"k={k}: k‑NN graph is disjoint with {nx.number_connected_components(G)} components. Ensuring connectivity…")
+        comps = list(nx.connected_components(G))
+        for i in range(len(comps) - 1):
+            best = min(
+                (
+                    (n1, n2, distance_matrix[n1, n2])
+                    for n1 in comps[i] for n2 in comps[i + 1]
+                ),
+                key=lambda x: x[2]  # choose closest pair
+            )
+            u, v, d = best
+            G.add_edge(
+                u, v,
+                dist=d,
+                weight=np.exp(-(d ** 2) / (2 * sigma ** 2)),
+                inv_weight=1 / (np.exp(-(d ** 2) / (2 * sigma ** 2)))
+            )
+    label_types = label.split('|') if '|' in label else [label]
+
+    feature_calculators = {
+        'expectancy': lambda seg: bin_expectancy(float(seg['expectancy'].mean())),
+        'ir_mode': lambda seg: seg['ir_symbol'].mode().iat[0] if not seg['ir_symbol'].mode().empty else "None",
+        'segment_length_binned': lambda seg: bin_length(len(seg)),
+        'rhythmic_density_binned': lambda seg: bin_density(
+            len(seg) / max(seg['duration_beats'].sum(), 1e-6)  # Avoid division by zero
+        ),
+        'ir_pattern_diversity': lambda seg: bin_diversity(len(seg['ir_symbol'].unique())),
+        'x': lambda seg: 'x',
+        'index': lambda seg, idx: str(idx)
+    }
+
+    for idx, seg in enumerate(segments):
+        if idx not in G:  # Node might have been isolated and not included if k=0 or disconnected
+            G.add_node(idx)  # Ensure node exists
+
+        # Calculate all possible features for this segment
+        node_features = {}
+        for feature_name, calculator in feature_calculators.items():
+            try:
+                if feature_name == 'index':
+                    node_features[feature_name] = calculator(seg, idx)
+                else:
+                    node_features[feature_name] = calculator(seg)
+            except Exception as e:
+                print(f"Warning: Could not calculate feature '{feature_name}' for segment {idx}. Error: {e}")
+                node_features[feature_name] = "Error"  # Assign error label
+
+        # Construct the final label based on the requested types
+        final_label_parts = []
+        for label_type in label_types:
+            label_type = label_type.strip()
+            if label_type in node_features:
+                final_label_parts.append(str(node_features[label_type]))  # Ensure string conversion
+            else:
+                print(f"Warning: Requested label type '{label_type}' not recognized. Skipping.")
+
+        G.nodes[idx]['label'] = '|'.join(final_label_parts) if final_label_parts else "UnknownLabel"
+
+        # Store raw expectancy as well
+        try:
+            G.nodes[idx]['expectancy'] = float(seg['expectancy'].mean())
+        except:
+            print("building expectancy porblem")
+            G.nodes[idx]['expectancy'] = np.nan
+    # print(f"Label: {final_label_parts}")
+    return G
+
 
 def distance_matrix_to_knn_graph(k: int, distance_matrix: np.array, graph_title: str,
                                  seed: int, iterations: int, force_connect=False, show_labels=False):
@@ -101,23 +243,7 @@ def distance_matrix_to_knn_graph(k: int, distance_matrix: np.array, graph_title:
     Returns:
         None (displays plot)
     """
-    knn_graph = kneighbors_graph(distance_matrix, n_neighbors=k, mode='connectivity')
-    G = nx.from_scipy_sparse_array(knn_graph)
-
-    if not nx.is_connected(G) and force_connect:
-        print("Connecting disjoint graph components...")
-        components = list(nx.connected_components(G))
-
-        for i in range(len(components) - 1):
-            min_dist = np.inf
-            closest_pair = None
-            for node1 in components[i]:
-                for node2 in components[i + 1]:
-                    dist = distance_matrix[node1, node2]
-                    if dist < min_dist:
-                        min_dist = dist
-                        closest_pair = (node1, node2)
-            G.add_edge(closest_pair[0], closest_pair[1])
+    G = construct_graph(k, distance_matrix, force_connect)
 
     pos = nx.spring_layout(G, seed=seed, iterations=iterations)
     nx.draw(G, node_size=50, pos=pos)
@@ -127,6 +253,75 @@ def distance_matrix_to_knn_graph(k: int, distance_matrix: np.array, graph_title:
         nx.draw_networkx_labels(G, pos, labels, font_size=10)
 
     plt.title(graph_title + f" (K={k})")
+    plt.show()
+
+
+def distance_matrices_to_knn_graphs(k: int, distance_matrices: dict, segments: dict, seed: int, iterations: int,
+                                    save_figures: bool = False, output_dir: str = "./Output/figures",
+                                    layout_type: str = "spring", force_connectivity: bool = False):
+    """
+    Creates KNN graphs from distance matrices and plots them in a grid layout.
+
+    Parameters:
+    k (int): Number of nearest neighbors for the KNN graph.
+    distance_matrices (dict): Dictionary where keys are composer names and values are distance matrices.
+    seed (int): Random seed for layout algorithms that use randomization.
+    iterations (int): Number of iterations for iterative layout algorithms.
+    save_figures (bool, optional): Whether to save individual figures. Defaults to False.
+    output_dir (str, optional): Directory to save figures to. Defaults to "./Output/figures".
+    layout_type (str, optional): Layout algorithm to use: "spring", "kamada", "spectral". Defaults to "spring".
+    force_connectivity (bool, optional): Whether to force the graph to be connected. Defaults to False.
+    """
+    if save_figures and not os.path.exists(output_dir):
+        os.makedirs(output_dir)
+
+    num_graphs = len(distance_matrices)
+    rows_needed = (num_graphs + 1) // 2
+    fig, axes = plt.subplots(rows_needed, 2, figsize=(12, rows_needed * 5))
+
+    if rows_needed == 1 and num_graphs == 1:
+        axes = np.array([[axes]])
+    elif num_graphs > 1:
+        axes = np.array(axes)
+        if axes.ndim == 1:
+            axes = axes.reshape(1, -1)
+
+    axes_flat = axes.flatten()
+
+    for ax, (composer, distance_matrix) in zip(axes_flat, distance_matrices.items()):
+        G = construct_graph(k, distance_matrix, segments[composer], force_connectivity)
+
+        # Apply the selected layout algorithm
+        if layout_type == "spring":
+            pos = nx.spring_layout(G, seed=seed, iterations=iterations, scale=2.0, center=(0, 0))
+        elif layout_type == "kamada":
+            pos = nx.kamada_kawai_layout(G)
+        elif layout_type == "spectral":
+            pos = nx.spectral_layout(G)
+        else:
+            # Default to spring layout if invalid option
+            pos = nx.spring_layout(G, seed=seed, iterations=iterations, scale=2.0, center=(0, 0))
+
+        nx.draw(G, node_size=50, pos=pos, ax=ax)
+        ax.set_title(f"{composer} (K={k})")
+        ax.axis('off')
+
+        if save_figures:
+            fig_individual, ax_individual = plt.subplots(figsize=(6, 5))
+            nx.draw(G, node_size=50, pos=pos, ax=ax_individual)
+            ax_individual.set_title(f"{composer} (K={k})")
+            ax_individual.axis('off')
+
+            safe_filename = composer.replace('|', '-').replace(':', '-').replace('\\', '-').replace('/', '-').replace(
+                '*', '-').replace('?', '-').replace('"', '-').replace('<', '-').replace('>', '-')
+            output_path = os.path.join(output_dir, f"{safe_filename}_KNN_graph.png")
+            fig_individual.savefig(output_path)
+            plt.close(fig_individual)
+
+    for ax in axes_flat[num_graphs:]:
+        ax.axis('off')
+
+    plt.tight_layout()
     plt.show()
 
 
@@ -176,7 +371,6 @@ def distance_matrix_to_knn_graph_scaled(k: int, distance_matrix: np.array, graph
     plt.axis('equal')
     plt.axis('off')
     plt.show()
-
 
 
 # ===============================

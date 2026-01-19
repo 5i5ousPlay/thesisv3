@@ -1,15 +1,13 @@
 import pickle
-import os
 import traceback
 
 import music21
-from music21 import converter, environment
+from music21 import converter
 
 from thesisv3.analysis.visualization import *
+from thesisv3.building.building import distance_matrix_to_knn_graph_scaled, construct_graph
 from thesisv3.preprocessing.preprocessing import *
-from thesisv3.building.building import distance_matrix_to_knn_graph_scaled
 from thesisv3.utils.file_manager import MusicFileManager
-from thesisv3.utils.helpers import save_to_pickle
 
 # Configure MuseScore paths
 env = environment.Environment()
@@ -19,7 +17,7 @@ env['musescoreDirectPNGPath'] = 'C:\\Program Files\\MuseScore 4\\bin\\MuseScore4
 us = music21.environment.UserSettings()
 us['musescoreDirectPNGPath'] = 'C:/Program Files/MuseScore 4/bin/MuseScore4.exe'
 
-__all__ = ['MusicFileManager', 'MusicSegmentAnalyzer', 'MusicVisualizer']
+__all__ = ['MusicFileManager', 'MusicSegmentAnalyzer', 'MusicVisualizer', 'GraphBatcher']
 
 
 class MusicSegmentAnalyzer:
@@ -102,9 +100,6 @@ class MusicSegmentAnalyzer:
 
         else:
             nmat, narr, sarr = parse_score_elements(self.parsed_score)
-            # nmat['mobility'] = mobility(nmat) # calculate mobility and add column to raw nmat
-            # nmat['tessitura'] = tessitura(nmat) # calculate tessitura and add column to raw nmat
-            # nmat['expectancy'] = calculate_note_expectancy_scores(nmat)
 
             ir_symbols = assign_ir_symbols(narr)
             self.ir_symbols = ir_symbols
@@ -202,46 +197,25 @@ class MusicVisualizer:
 
 
 class GraphBuilder:
-    def __init__(self, k: int, distance_matrix: np.ndarray, segments: list[pd.DataFrame]):
+    def __init__(self, k: int, distance_matrix: np.ndarray, force_connectivity=False):
+        self.force_connectivity = force_connectivity
         self.k = k
         self.graph = None
-        self.graphs = None
         self.distance_matrix = distance_matrix
-        self.segments = segments
 
     def construct_graph(self):
-        knn_graph = kneighbors_graph(self.distance_matrix, n_neighbors=self.k, mode='connectivity')
-        G = nx.from_scipy_sparse_array(knn_graph)
-
-        # for i in range(len(self.segments)):
-        #     G.nodes[i]['label'] = np.round(self.segments[i]['expectancy'].mean(), decimals=2)
-        #     G.nodes[i]['label'] = i
-
-        # if not nx.is_connected(G):
-        #     print("The KNN graph is disjoint. Ensuring connectivity...")
-        #
-        #     components = list(nx.connected_components(G))
-        #
-        #     for i in range(len(components) - 1):
-        #         min_dist = np.inf
-        #         closest_pair = None
-        #         for node1 in components[i]:
-        #             for node2 in components[i + 1]:
-        #                 dist = self.distance_matrix[node1, node2]
-        #                 if dist < min_dist:
-        #                     min_dist = dist
-        #                     closest_pair = (node1, node2)
-        #         G.add_edge(closest_pair[0], closest_pair[1])
-        self.graph = G
-        return G
+        self.graph = construct_graph(self.k, self.distance_matrix, force_connectivity=self.force_connectivity)
+        return self.graph
 
 
 class GraphBatcher:
-    def __init__(self, k=5, output_dir='./batcher_output'):
+    def __init__(self, k=5, output_dir='./Output/batcher_output', force_connectivity=False, label='expectancy|ir_mode'):
         self.k = k
         self.graphs = []
         self.graph_dict = {}
+        self.force_connectivity = force_connectivity
 
+        self.label = label
         self.segments = []
         self.segment_dict = {}
 
@@ -257,7 +231,8 @@ class GraphBatcher:
         os.makedirs(self.output_dir, exist_ok=True)
 
         # Define paths for each pickle file
-        self.graphs_path = os.path.join(self.output_dir, 'graphs.pkl')
+        # self.graphs_path = os.path.join(self.output_dir, 'graphs.pkl')
+        self.graphs_path = os.path.join(self.output_dir, f'graphs_k{self.k}.pkl')
         self.segments_path = os.path.join(self.output_dir, 'segments.pkl')
         self.distmat_path = os.path.join(self.output_dir, 'distance_matrices.pkl')
         self.processed_files_path = os.path.join(self.output_dir, 'processed_files.pkl')
@@ -275,12 +250,8 @@ class GraphBatcher:
             print(f"Analyzing {file}")
             try:
                 self.analyzer.run(self.file_manager.files[file])
-                builder = GraphBuilder(self.k,
-                                       self.analyzer.distance_matrix,
-                                       self.analyzer.prepped_segments)
-
-                # Create the graph
-                graph = builder.construct_graph()
+                graph = construct_graph(self.k, self.analyzer.distance_matrix, self.analyzer.prepped_segments,
+                                        force_connectivity=self.force_connectivity, label=self.label)
 
                 # Add to lists
                 self.graphs.append(graph)
@@ -300,6 +271,38 @@ class GraphBatcher:
                 print(f"Error parsing: {file} at {self.file_manager.files[file]}. Skipping file")
                 print(traceback.format_exc())
                 continue
+
+    def build_graphs(self):
+        """
+        Build graphs for processed files using pre-loaded segment and distance matrix data.
+        """
+        # Initialize the graph containers
+        self.graphs = []
+        self.graph_dict = {}
+
+        # Process each file we've already analyzed
+        for file in self.processed_files:
+            print(f"Building graph for {file}")
+            try:
+                # Get the distance matrix and segments from dictionaries
+                distance_matrix = self.distmat_dict[file]
+
+                graph = construct_graph(self.k, distance_matrix, self.segment_dict[file],
+                                        force_connectivity=self.force_connectivity, label=self.label)
+
+                # Add to list and dictionary
+                self.graphs.append(graph)
+                self.graph_dict[file] = graph
+
+                # Save progress after each file
+                self.save_progress()
+
+            except Exception as e:
+                print(f"Error building graph for: {file}. Skipping file")
+                print(traceback.format_exc())
+                continue
+
+        print(f"Completed building graphs for {len(self.graph_dict)} files")
 
     def save_progress(self):
         """Save each variable to its own pickle file, overwriting previous versions."""
@@ -342,7 +345,8 @@ class GraphBatcher:
 
         # Rebuild the lists from the dictionaries
         if self.processed_files:
-            self.graphs = [self.graph_dict[f] for f in self.processed_files]
+            if self.graph_dict:
+                self.graphs = [self.graph_dict[f] for f in self.processed_files]
             self.segments = [self.segment_dict[f] for f in self.processed_files]
             self.distance_matrices = [self.distmat_dict[f] for f in self.processed_files]
 

@@ -1,16 +1,16 @@
 import math
 import re
-from multiprocessing import cpu_count, Manager, Pool
+from multiprocessing import cpu_count, Pool
 
 import matplotlib.pyplot as plt
 import networkx as nx
 import numpy as np
 import pandas as pd
-
-from thesisv3.utils import worker
 from music21 import chord, note, stream, meter
 from sklearn.neighbors import kneighbors_graph
 from sklearn.preprocessing import MinMaxScaler
+
+from thesisv3.utils import worker
 
 
 # # Usage
@@ -206,7 +206,7 @@ def parse_score_elements(score: stream.Score, all_parts: bool = False) -> tuple[
     narr = []  # List for successfully processed note/chord/rest elements
     sarr = []  # List for all elements encountered
     nmat = pd.DataFrame(columns=[
-        'onset_beats',             # Global onset in beats for the whole piece
+        'onset_beats',  # Global onset in beats for the whole piece
         'onset_beats_in_measure',  # Onset relative to the measure
         'duration_beats',
         'midi_pitch',
@@ -334,7 +334,7 @@ def calculate_ir_symbol(interval1, interval2, threshold=5):
         return 'M'  # Default to Monad if none of the above
 
 
-def assign_ir_symbols(note_array):
+def assign_ir_symbols(note_array, mode='2-factor'):
     """
     Assigns IR symbols, colors, and pattern indices to each element in the note array.
     Groups contiguous note/chord elements into groups of 3. If an interruption occurs
@@ -352,8 +352,8 @@ def assign_ir_symbols(note_array):
         list: A list of tuples (element, ir_symbol, color, pattern_index) for each element.
     """
     symbols = []
-    current_group = []
-    group_pitches = []
+    window = []  # Sliding window of notes
+    pitches = []  # Corresponding pitches for the window
 
     # Map IR symbols to colors.
     color_map = {
@@ -370,296 +370,46 @@ def assign_ir_symbols(note_array):
         'rest': 'black'
     }
 
-    pattern_index = 0
-
-    def evaluate_current_group():
-        nonlocal pattern_index
-        if not current_group:
-            return
-        if len(current_group) >= 3:
-            # For groups of three, use the first two intervals.
-            interval1 = group_pitches[1] - group_pitches[0]
-            interval2 = group_pitches[2] - group_pitches[1]
-            symbol = calculate_ir_symbol(interval1, interval2)
-            col = color_map.get(symbol, 'black')
-            for elem in current_group:
-                symbols.append((elem, symbol, col, pattern_index))
-        elif len(current_group) == 2:
-            for elem in current_group:
-                symbols.append((elem, 'd', color_map['d'], pattern_index))
-        elif len(current_group) == 1:
-            for elem in current_group:
-                symbols.append((elem, 'M', color_map['M'], pattern_index))
-        pattern_index += 1
-        current_group.clear()
-        group_pitches.clear()
-
-    def flush_current_group():
-        if current_group:
-            evaluate_current_group()
-
-    def get_tuplet_status(e):
-        """
-        Returns "tuplet" if the element is part of a tuplet whose actual note count is a multiple of 3,
-        otherwise returns "single".
-        """
-        if hasattr(e, 'duration') and e.duration.tuplets:
-            tup = e.duration.tuplets[0]
-            if tup.numberNotesActual % 3 == 0:
-                return "tuplet"
-        return "single"
-
-    i = 0
-    num_notes = len(note_array)
-    while i < num_notes:
-        elem = note_array[i]
+    for elem in note_array:
         if isinstance(elem, note.Rest):
-            # A rest interrupts the group.
-            flush_current_group()
-            symbols.append((elem, 'rest', color_map['rest'], pattern_index))
-            pattern_index += 1
-            i += 1
+            # A rest interrupts the window
+            # Process any remaining notes in the window
+            if len(window) == 1:
+                symbols.append((window[0], 'M', color_map['M'], 0))
+            elif len(window) == 2:  # len == 2
+                symbols.append((window[0], 'd', color_map['d'], 0))
+                symbols.append((window[1], 'M', color_map['M'], 0))
+            window.clear()
+            pitches.clear()
+            symbols.append((elem, 'rest', color_map['rest'], 0))
+
         elif isinstance(elem, (note.Note, chord.Chord)):
-            # Check if this element is part of a tuplet block.
-            if get_tuplet_status(elem) == "tuplet":
-                # Collect the contiguous tuplet block.
-                tuplet_group = []
-                tuplet_group_pitches = []
-                while (i < num_notes and
-                       isinstance(note_array[i], (note.Note, chord.Chord)) and
-                       get_tuplet_status(note_array[i]) == "tuplet"):
-                    t_elem = note_array[i]
-                    tuplet_group.append(t_elem)
-                    if isinstance(t_elem, note.Note):
-                        tuplet_group_pitches.append(t_elem.pitch.ps)
-                    elif isinstance(t_elem, chord.Chord):
-                        tuplet_group_pitches.append(t_elem.root().ps)
-                    i += 1
-                # If the block’s length is a multiple of 3, treat it as an interruption:
-                if len(tuplet_group) % 3 == 0:
-                    flush_current_group()
-                    # Process the tuplet block in chunks of 3.
-                    for j in range(0, len(tuplet_group), 3):
-                        chunk = tuplet_group[j:j + 3]
-                        chunk_pitches = tuplet_group_pitches[j:j + 3]
-                        if len(chunk) == 3:
-                            interval1 = chunk_pitches[1] - chunk_pitches[0]
-                            interval2 = chunk_pitches[2] - chunk_pitches[1]
-                            sym = calculate_ir_symbol(interval1, interval2)
-                            col = color_map.get(sym, 'black')
-                            for item in chunk:
-                                symbols.append((item, sym, col, pattern_index))
-                        elif len(chunk) == 2:
-                            for item in chunk:
-                                symbols.append((item, 'd', color_map['d'], pattern_index))
-                        else:
-                            for item in chunk:
-                                symbols.append((item, 'M', color_map['M'], pattern_index))
-                        pattern_index += 1
-                else:
-                    # If the tuplet block is NOT a multiple of 3, add its notes to the current group.
-                    for t_elem in tuplet_group:
-                        current_group.append(t_elem)
-                        if isinstance(t_elem, note.Note):
-                            group_pitches.append(t_elem.pitch.ps)
-                        elif isinstance(t_elem, chord.Chord):
-                            group_pitches.append(t_elem.root().ps)
-                        if len(current_group) == 3:
-                            evaluate_current_group()
-            else:
-                # A non-tuplet note/chord: add to current group.
-                current_group.append(elem)
-                if isinstance(elem, note.Note):
-                    group_pitches.append(elem.pitch.ps)
-                elif isinstance(elem, chord.Chord):
-                    group_pitches.append(elem.root().ps)
-                if len(current_group) == 3:
-                    evaluate_current_group()
-                i += 1
-        else:
-            flush_current_group()
-            i += 1
-    flush_current_group()
-    return symbols
+            # Add the note to the window
+            window.append(elem)
+            if isinstance(elem, note.Note):
+                pitches.append(elem.pitch.ps)
+            elif isinstance(elem, chord.Chord):
+                pitches.append(elem.root().ps)
 
+            # If we have a triplet, process the first note
+            if len(window) == 3:
+                interval1 = pitches[1] - pitches[0]
+                interval2 = pitches[2] - pitches[1]
+                symbol = calculate_ir_symbol(interval1, interval2)
+                expectancy = encode_note_expectancy_score(pitches[0], pitches[1], pitches[2], mode=mode)
+                col = color_map.get(symbol, 'black')
 
-# This version incorrectly treats beamed notes as one group.
-def assign_ir_symbols_too_complicated(note_array):
-    """
-    Assigns IR symbols, colors, and pattern indices to each element in the note array.
-    Groups elements based on beam criteria and adjacent non-beamed elements, then assigns
-    a unique pattern index to each group. For groups with three or more elements, the first
-    two intervals are used to calculate the IR symbol (via calculate_ir_symbol). Two-element
-    groups are labeled as dyads ('d'), and single elements as monads ('M').
+                # Add symbol to oldest note in window
+                symbols.append((window[1], symbol, col, expectancy))
 
-    Parameters:
-        note_array (list): A list of music21 note and chord elements.
+                # Slide the window by removing the oldest note
+                window.pop(0)
+                pitches.pop(0)
 
-    Returns:
-        list: A list of tuples (element, ir_symbol, color, pattern_index) for each element.
-    """
-    symbols = []  # Will hold tuples: (element, ir_symbol, color, pattern_index)
-    current_group = []
-    group_pitches = []
-
-    # Map IR symbols to colors.
-    color_map = {
-        'P': 'blue',      # IR1: P (Process)
-        'D': 'green',     # IR2: D (Duplication)
-        'IP': 'red',      # IR3: IP (Intervallic Process)
-        'ID': 'orange',   # IR4: ID (Intervallic Duplication)
-        'VP': 'purple',   # IR5: VP (Vector Process)
-        'R': 'cyan',      # IR6: R (Reversal)
-        'IR': 'magenta',  # IR7: IR (Intervallic Reversal)
-        'VR': 'yellow',   # IR8: VR (Vector Reversal)
-        'M': 'pink',      # IR9: M (Monad)
-        'd': 'lime',      # IR10: d (Dyad)
-    }
-
-    # Define which beam statuses indicate a beamed element.
-    beamed_set = ['start', 'continue', 'partial', 'stop']
-
-    # This will count groups as we evaluate them.
-    pattern_index = 0
-
-    def evaluate_current_group():
-        nonlocal pattern_index
-        if not current_group:
-            return
-        if len(current_group) >= 3:
-            print(current_group)
-            # Use the first two intervals to determine the IR symbol.
-            interval1 = group_pitches[1] - group_pitches[0]
-            interval2 = group_pitches[2] - group_pitches[1]
-            symbol = calculate_ir_symbol(interval1, interval2)
-            color = color_map.get(symbol, 'black')
-            symbols.extend([(elem, symbol, color, pattern_index) for elem in current_group])
-        elif len(current_group) == 2:
-            symbols.extend([(elem, 'd', color_map['d'], pattern_index) for elem in current_group])
-        elif len(current_group) == 1:
-            symbols.extend([(elem, 'M', color_map['M'], pattern_index) for elem in current_group])
-        pattern_index += 1
-        current_group.clear()
-        group_pitches.clear()
-
-    def get_beam_status(e):
-        """
-        Determines the beam status of a note or chord.
-        Returns:
-            'start', 'continue', 'stop', 'partial', or 'single' if not beamed.
-        """
-        from music21 import note, chord
-        if not isinstance(e, (note.Note, chord.Chord)):
-            return None
-        beam_status = 'single'  # Default for unbeamed notes.
-        if e.beams:
-            beam_types = [beam.type for beam in e.beams.beamsList]
-            if 'start' in beam_types:
-                beam_status = 'start'
-            elif 'continue' in beam_types:
-                beam_status = 'continue'
-            elif 'stop' in beam_types:
-                beam_status = 'stop'
-            elif 'partial' in beam_types:
-                beam_status = 'partial'
-        return beam_status
-
-    num_notes = len(note_array)
-    i = 0
-    from music21 import note, chord  # Ensure these types are available.
-    while i < num_notes:
-        element = note_array[i]
-        if isinstance(element, (note.Note, chord.Chord)):
-            beam_status = get_beam_status(element)
-            if beam_status in beamed_set:
-                # If the element is beamed, collect all contiguous beamed elements.
-                current_group.append(element)
-                if isinstance(element, note.Note):
-                    group_pitches.append(element.pitch.ps)
-                elif isinstance(element, chord.Chord):
-                    group_pitches.append(element.root().ps)
-                i += 1
-                while i < num_notes:
-                    next_element = note_array[i]
-                    if not isinstance(next_element, (note.Note, chord.Chord)):
-                        break
-                    next_beam_status = get_beam_status(next_element)
-                    if next_beam_status in beamed_set:
-                        current_group.append(next_element)
-                        if isinstance(next_element, note.Note):
-                            group_pitches.append(next_element.pitch.ps)
-                        elif isinstance(next_element, chord.Chord):
-                            group_pitches.append(next_element.root().ps)
-                        i += 1
-                        if next_beam_status == 'stop':
-                            break
-                    else:
-                        break
-                # For beamed groups: if the group is exactly size 2 and the next element is non-beamed,
-                # merge it.
-                if len(current_group) == 2 and i < num_notes:
-                    if get_beam_status(note_array[i]) == 'single':
-                        next_element = note_array[i]
-                        current_group.append(next_element)
-                        if isinstance(next_element, note.Note):
-                            group_pitches.append(next_element.pitch.ps)
-                        elif isinstance(next_element, chord.Chord):
-                            group_pitches.append(next_element.root().ps)
-                        i += 1
-                evaluate_current_group()
-                continue  # Already advanced i.
-            else:
-                # For non-beamed elements, add them to the current group.
-                current_group.append(element)
-                if isinstance(element, note.Note):
-                    group_pitches.append(element.pitch.ps)
-                elif isinstance(element, chord.Chord):
-                    group_pitches.append(element.root().ps)
-                # Look ahead: if the next element starts a beamed group,
-                # check if that contiguous beamed group is exactly of size 2.
-                if i < num_notes - 1:
-                    next_element = note_array[i+1]
-                    if get_beam_status(next_element) in beamed_set:
-                        temp_index = i + 1
-                        temp_group = []
-                        while temp_index < num_notes and get_beam_status(note_array[temp_index]) in beamed_set:
-                            temp_group.append(note_array[temp_index])
-                            temp_index += 1
-                        if len(temp_group) == 2:
-                            # Merge the two beamed elements into the current group.
-                            for elem in temp_group:
-                                current_group.append(elem)
-                                if isinstance(elem, note.Note):
-                                    group_pitches.append(elem.pitch.ps)
-                                elif isinstance(elem, chord.Chord):
-                                    group_pitches.append(elem.root().ps)
-                            i = temp_index
-                            evaluate_current_group()
-                            continue
-                        elif len(temp_group) > 2:
-                            # Do NOT merge: evaluate the current group (which holds just the non-beamed element)
-                            evaluate_current_group()
-                            i += 1  # Increment to avoid reprocessing the same element.
-                            continue
-                # If the non-beamed group grows by itself, evaluate it.
-                if len(current_group) >= 3:
-                    evaluate_current_group()
-                i += 1
-        elif isinstance(element, note.Rest):
-            if current_group:
-                evaluate_current_group()
-            symbols.append((element, 'rest', 'black', pattern_index))
-            pattern_index += 1
-            i += 1
-        else:
-            if current_group:
-                evaluate_current_group()
-            i += 1
-
-    if current_group:
-        evaluate_current_group()
+    symbols = [(note_array[0], 'X', 'grey', 0)] + symbols + [(note_array[len(note_array) - 1], 'X', 'grey', 0)]
 
     return symbols
+
 
 def ir_symbols_to_matrix(note_array, note_matrix):
     """
@@ -672,9 +422,9 @@ def ir_symbols_to_matrix(note_array, note_matrix):
     Returns:
     pd.DataFrame: The updated DataFrame with assigned IR symbols.
     """
-    for pointer, (note_data, ir_symbol, color, index) in enumerate(note_array):
+    for pointer, (note_data, ir_symbol, color, expectancy) in enumerate(note_array):
         note_matrix.at[pointer, 'ir_symbol'] = ir_symbol
-        note_matrix.at[pointer, 'pattern_index'] = index
+        note_matrix.at[pointer, 'expectancy'] = expectancy
     return note_matrix
 
 
@@ -874,7 +624,6 @@ def segmentgestalt(notematrix):
 
     clind, clb = calculate_clang_boundaries(notematrix)
     s = calculate_segment_boundaries(notematrix, clind)
-    s = adjust_segment_boundaries(notematrix, s)
 
     c = pd.Series(0, index=range(len(notematrix)))
     c.iloc[clind] = 1
@@ -1048,10 +797,6 @@ def segment_lbdm(nmat):
 
 def preprocess_segments(segments: list[pd.DataFrame]) -> list[pd.DataFrame]:
     """
-    Drops the pattern_index column and one-hot encodes the ir_symbol column for each DataFrame in the list of segments.
-
-    Ensures that each DataFrame has columns for all specified states.
-
     Parameters:
     segments (list[pd.DataFrame]): List of DataFrames representing segments.
 
@@ -1059,36 +804,30 @@ def preprocess_segments(segments: list[pd.DataFrame]) -> list[pd.DataFrame]:
     list[pd.DataFrame]: List of preprocessed DataFrames.
     """
     # Define the possible states
-    states = ['P', 'D', 'IP', 'ID', 'VP', 'R', 'IR', 'VR', 'M', 'd', 'rest']
-    state_columns = [f'ir_symbol_{state}' for state in states]
+    # states = ['P', 'D', 'IP', 'ID', 'VP', 'R', 'IR', 'VR', 'M', 'd', 'rest']
+    # state_columns = [f'ir_symbol_{state}' for state in states]
 
     preprocessed_segments = []
 
     for segment in segments:
-        # Drop the pattern_index column
-        segment = segment.drop(columns=['pattern_index'])
-
         # One-hot encode the ir_symbol column
-        segment = pd.get_dummies(segment, columns=['ir_symbol'])
+        # segment = pd.get_dummies(segment, columns=['ir_symbol'])
+        #
+        # # Ensure all state columns are present
+        # for state_column in state_columns:
+        #     if state_column not in segment.columns:
+        #         segment[state_column] = 0
+        # segment[state_columns] = segment[state_columns].astype(int)
 
-        # Ensure all state columns are present
-        for state_column in state_columns:
-            if state_column not in segment.columns:
-                segment[state_column] = 0
-        segment[state_columns] = segment[state_columns].astype(int)
-
-        # Reorder columns to ensure the state columns are in the correct order
-        # 'onset_beats',
-        # 'onset_beats_in_measure',
-        # 'duration_beats',
-        # 'midi_pitch',
-        # 'pitch_class',
-        # 'octave',
-        # 'beat_strength'
         segment = segment[
-            ['onset_beats_in_measure', 'duration_beats', 'pitch_class', 'octave', 'beat_strength',
-             # 'expectancy'
-             ] + state_columns]
+            ['onset_beats_in_measure',
+             'duration_beats',
+             'pitch_class',
+             'octave',
+             'beat_strength',
+             'ir_symbol',  # 'P', 'D', 'IP', 'ID', 'VP', 'R', 'IR', 'VR', 'M', 'd', 'rest'
+             'expectancy'
+             ]]
 
         preprocessed_segments.append(segment)
 
@@ -1110,7 +849,14 @@ def segments_to_distance_matrix(segments: list[pd.DataFrame], cores=None, debug=
         raise ValueError(f"You don't have enough cores! Please specify a value within your system's number of "
                          f"cores. Core Count: {cpu_count()}")
 
-    seg_np = [segment.to_numpy() for segment in segments]
+    desired_columns = [
+        'onset_beats_in_measure',
+        'duration_beats',
+        'pitch_class',
+        'octave',
+        'beat_strength'
+    ]
+    seg_np = np.array([segment[desired_columns].to_numpy() for segment in segments], dtype=object)
 
     num_segments = len(seg_np)
     distance_matrix = np.zeros((num_segments, num_segments))
@@ -1118,25 +864,24 @@ def segments_to_distance_matrix(segments: list[pd.DataFrame], cores=None, debug=
     args_list = []
     for i in range(num_segments):
         for j in range(i + 1, num_segments):
-            args_list.append((i, j, segments[i], segments[j]))
+            args_list.append((i, j, seg_np[i], seg_np[j]))
 
-    with Manager() as manager:
-        message_list = manager.list()
-
-        def log_message(message):
-            message_list.append(message)
-
-        with Pool(cores) as pool:
-            results = pool.map(worker.calculate_distance, args_list)
-
-        for i, j, distance, message in results:
-            distance_matrix[i, j] = distance
-            distance_matrix[j, i] = distance  # Reflect along the diagonal
-            log_message(message)
-
+    with Pool(cores) as pool:
+        # Using imap_unordered can be faster as results come in any order
         if debug:
-            for message in message_list:
+            messages = []
+            for i, j, distance, message in pool.imap_unordered(worker.calculate_distance, args_list):
+                distance_matrix[i, j] = distance
+                distance_matrix[j, i] = distance  # Reflect along the diagonal
+                messages.append(message)
+
+            for message in messages:
                 print(message)
+        else:
+            # When not debugging, we don't need to collect messages
+            for i, j, distance, _ in pool.imap_unordered(worker.calculate_distance, args_list):
+                distance_matrix[i, j] = distance
+                distance_matrix[j, i] = distance  # Reflect along the diagonal
 
     return distance_matrix
 
@@ -1339,3 +1084,122 @@ def calculate_note_expectancy_scores(nmat: pd.DataFrame) -> np.ndarray:
     expectancy_scores[0] = 0.5
 
     return expectancy_scores
+
+
+def encode_note_expectancy_score(p1, p2, p3, mode='2-factor'):
+    """
+    Calculates the expectancy score for the center note
+    in a three note sequence.
+
+    :params p1,p2,p3 (floats): note pitches
+    :param mode (str): specifies if 5 or 2 factor calculation
+
+    :returns out(float): expectancy score for p2
+    """
+    SMALL = 5  # ≤5 st = “small”
+    LARGE = 6  # ≥7 st = “large”
+    # BETA_5 = np.array([0.23, 0.19, 0.21, -0.42, 0.15])
+    BETA_5 = np.array([0.305, 0.130, 0.187, 0.267, 0.126])
+    BETA_2 = np.array([0.604, 0.379])
+
+    d1 = np.sign(p2 - p1)
+    d2 = np.sign(p3 - p2)
+    s1 = abs(p2 - p1)
+    s2 = abs(p3 - p2)
+
+    # Registral Direction
+    if s1 <= SMALL:
+        reg_dir = int(d1 == d2)
+    elif s1 >= LARGE:
+        reg_dir = int(d1 != d2)
+    else:
+        reg_dir = 0
+
+    # Intervallic Difference
+    if d1 == d2:
+        interv_diff = int(abs(s2 - s1) <= 3)
+    else:
+        interv_diff = int(abs(s2 - s1) <= 2)
+
+    # Registral Return
+    retdiff = abs(p3 - p1)
+    if retdiff == 0:
+        reg_return = 3
+    elif retdiff <= 2:
+        reg_return = 2
+    elif retdiff <= 4:
+        reg_return = 1
+    else:
+        reg_return = 0
+
+    # Proximity
+    proximity = max(0, min(6, 6 - s2))
+
+    # Closure
+    closure = int(d1 != d2) + int(s2 < s1)
+
+    if mode == '5-factor':
+        vec = np.array([reg_dir, interv_diff, reg_return, proximity, closure])
+        vec[3] = 6 - vec[3]
+        return np.dot(vec, BETA_5)
+    elif mode == '2-factor':
+        pitch_reversal = 0
+        if d1 != d2:
+            if s1 >= LARGE:
+                if 2 >= s2 - s1 >= -2:
+                    pitch_reversal = 2.5
+                else:
+                    pitch_reversal = 1
+            if s1 <= SMALL:
+                if s1 >= 1 and s2 >= 1:
+                    if 2 >= s2 - s1 >= -2:
+                        pitch_reversal = 1.5
+                    else:
+                        pitch_reversal = 0
+        else:
+            if s1 >= LARGE:
+                pitch_reversal = -1
+            elif s1 <= SMALL:
+                pitch_reversal = 0
+
+        pitch_proximity = 12 - min(s2, 12)  # reverse proximity score because of its negative correlation
+
+        pitch_proximity_norm = pitch_proximity / 12
+
+        # Reversal values are in [-1, 2.5] → range = 3.5
+        pitch_reversal_norm = (pitch_reversal + 1) / 3.5
+
+        E = 0.604 * pitch_proximity_norm + 0.379 * pitch_reversal_norm
+
+        return E
+
+        # pp = 6 - proximity  # reverse proximity score
+        # if reg_dir == 1:
+        #     pr = 1
+        # elif reg_dir == 0:
+        #     pr = 0
+        # elif reg_return >= 2:
+        #     pr = 1.5
+        # else:
+        #     pr = -1
+        # vec = np.array([pp, pr])
+        # return np.dot(vec, BETA_2)
+    else:
+        raise ValueError("Provided mode does not exist. Only modes are '5-factor' and '2-factor'")
+
+
+def segment_expectancy(segment_exp: pd.Series, mode='mean'):
+    """
+    Calculates the aggregated expectancy of a segment.
+
+    :param segment_exp (pd.Series): expectancy scores of notes in a segment
+    :param mode (str): specifies the mode for calculating segment expectancy
+    :return: aggregated expectancy of segment
+    """
+    if mode == 'mean':
+        return segment_exp.mean()
+    elif mode == 'surprisal':
+        p = np.exp(segment_exp) / np.exp(segment_exp).sum()
+        return -(np.log(p).mean())
+    else:
+        raise ValueError("Mode does not exist. Specify either 'mean' or 'surprisal' only")
